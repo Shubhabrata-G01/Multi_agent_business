@@ -82,6 +82,16 @@ Open http://localhost:3000.
 - A step that fails or reports `STATUS: BLOCKED` halts the run rather than
   continuing on a broken chain — downstream steps depend on upstream
   artifacts, so silently skipping one would corrupt everything after it.
+- **Groq/OpenRouter max_tokens auto-correction:** models on these platforms
+  enforce very different `max_tokens` ceilings - some cap in the low
+  hundreds. If a request is rejected specifically for exceeding that
+  ceiling, `lib/providers/openaiCompatible.ts` retries once at the exact
+  limit the API reported, rather than failing the step. This keeps the run
+  going, but a model capped that low will produce a noticeably shorter,
+  possibly truncated artifact for that step than the same step would get on
+  a larger-output model - if artifact quality/completeness matters, check
+  the model's actual max output on the provider's docs and pick one with
+  headroom above `LLM_MAX_TOKENS`, rather than relying on the auto-retry.
 
 ## Known simplifications (v1)
 
