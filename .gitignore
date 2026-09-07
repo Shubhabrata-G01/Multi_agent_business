@@ -1,0 +1,5 @@
+.claude/
+scratch/
+tools/
+*.pyc
+__pycache__/

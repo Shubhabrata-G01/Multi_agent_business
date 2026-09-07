@@ -1,0 +1,1036 @@
+[
+  {
+    "id": "AE-001",
+    "name": "Account Executive / Sales Manager",
+    "aliases": [
+      "Account Executive",
+      "Sales Manager",
+      "AE"
+    ],
+    "team": "Sales / Revenue",
+    "reports_to": "CRO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with SDR, Sales Engineering, Legal, Finance, Product, Customer Success."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "66"
+    ],
+    "file": "/company/agents/sales-revenue/AE-001.md"
+  },
+  {
+    "id": "AIE-001",
+    "name": "ML / AI Engineer",
+    "aliases": [
+      "ML/AI Engineer",
+      "AI Engineer",
+      "ML / AI Engineer",
+      "ML"
+    ],
+    "team": "AI / Data",
+    "reports_to": "HAI-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Head of AI, Data Engineering, Backend, Product, QA, Security, DevOps."
+    ],
+    "flow_primary_steps": [
+      "42"
+    ],
+    "flow_supporting_steps": [
+      "20",
+      "23",
+      "33",
+      "46"
+    ],
+    "file": "/company/agents/ai-data/AIE-001.md"
+  },
+  {
+    "id": "AIEVAL-001",
+    "name": "AI Evaluation / Model Quality Engineer",
+    "aliases": [
+      "AI Evaluation",
+      "Model Quality Engineer"
+    ],
+    "team": "AI / Data",
+    "reports_to": "HAI-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with AI Engineering, Product, QA, Security, Customer Success."
+    ],
+    "flow_primary_steps": [
+      "46"
+    ],
+    "flow_supporting_steps": [
+      "20",
+      "33",
+      "42",
+      "47"
+    ],
+    "file": "/company/agents/ai-data/AIEVAL-001.md"
+  },
+  {
+    "id": "ARCH-001",
+    "name": "Software Architect / Tech Lead",
+    "aliases": [
+      "Software Architect",
+      "Tech Lead",
+      "Software Architect / Tech Lead"
+    ],
+    "team": "Engineering / Technology",
+    "reports_to": "CTO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CTO, PM, Backend/Frontend, AI/Data, DevOps/SRE, Security, QA."
+    ],
+    "flow_primary_steps": [
+      "19",
+      "29",
+      "31",
+      "32",
+      "44"
+    ],
+    "flow_supporting_steps": [
+      "18",
+      "21",
+      "22",
+      "23",
+      "26",
+      "30",
+      "34",
+      "35",
+      "36",
+      "37",
+      "40",
+      "54"
+    ],
+    "file": "/company/agents/engineering/ARCH-001.md"
+  },
+  {
+    "id": "BE-001",
+    "name": "Backend Engineer",
+    "aliases": [
+      "Backend Engineer",
+      "Backend"
+    ],
+    "team": "Engineering / Technology",
+    "reports_to": "EM-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Tech Lead, Frontend, QA, DevOps/SRE, AI/Data, Security."
+    ],
+    "flow_primary_steps": [
+      "40"
+    ],
+    "flow_supporting_steps": [
+      "19",
+      "29",
+      "31",
+      "32",
+      "41",
+      "42",
+      "43",
+      "49"
+    ],
+    "file": "/company/agents/engineering/BE-001.md"
+  },
+  {
+    "id": "BOM-001",
+    "name": "Business Operations Manager",
+    "aliases": [
+      "Business Operations Manager",
+      "Business Ops"
+    ],
+    "team": "Operations",
+    "reports_to": "COO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with COO, Finance, IT/Engineering, HR, Legal, Product, GTM."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "79"
+    ],
+    "file": "/company/agents/operations/BOM-001.md"
+  },
+  {
+    "id": "CEO-001",
+    "name": "CEO",
+    "aliases": [
+      "CEO"
+    ],
+    "team": "Executive Team",
+    "reports_to": "Human Founder / CEO",
+    "can_delegate_to": [
+      "CFO-001",
+      "CMO-001",
+      "COO-001",
+      "CPO-001",
+      "CRO-001",
+      "CTO-001",
+      "GC-001",
+      "HCS-001",
+      "HRH-001"
+    ],
+    "directly_supports_raw": [
+      "Interacts with all department heads: CPO/Product, CTO, CMO/Growth, CRO/Sales, CCO/Customer Success, CFO/Finance, COO/Operations, General Counsel, CHRO/People."
+    ],
+    "flow_primary_steps": [
+      "01",
+      "02",
+      "13",
+      "38",
+      "70",
+      "80",
+      "81"
+    ],
+    "flow_supporting_steps": [
+      "03",
+      "07",
+      "10",
+      "11",
+      "14",
+      "15",
+      "16",
+      "52",
+      "63",
+      "72",
+      "73",
+      "74",
+      "75"
+    ],
+    "file": "/company/agents/executive/CEO-001.md"
+  },
+  {
+    "id": "CFO-001",
+    "name": "CFO",
+    "aliases": [
+      "CFO"
+    ],
+    "team": "Executive Team",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "CTRL-001",
+      "FPA-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO, Sales, Marketing, Product, Engineering/AI, Operations, HR, and Legal."
+    ],
+    "flow_primary_steps": [
+      "11",
+      "52",
+      "73",
+      "74"
+    ],
+    "flow_supporting_steps": [
+      "02",
+      "12",
+      "13",
+      "38",
+      "60",
+      "70",
+      "80"
+    ],
+    "file": "/company/agents/executive/CFO-001.md"
+  },
+  {
+    "id": "CMO-001",
+    "name": "CMO / Head of Growth",
+    "aliases": [
+      "CMO",
+      "Head of Growth"
+    ],
+    "team": "Growth / Marketing",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "CONT-001",
+      "PERF-001",
+      "PMM-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO, Product, Marketing specialists, Sales, Customer Success, Finance, Analytics."
+    ],
+    "flow_primary_steps": [
+      "64"
+    ],
+    "flow_supporting_steps": [
+      "15",
+      "74",
+      "80"
+    ],
+    "file": "/company/agents/growth-marketing/CMO-001.md"
+  },
+  {
+    "id": "CONT-001",
+    "name": "Content / SEO Specialist",
+    "aliases": [
+      "Content",
+      "SEO Specialist",
+      "Content/SEO"
+    ],
+    "team": "Growth / Marketing",
+    "reports_to": "CMO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Product Marketing, Design, Growth Analytics, Sales."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "65"
+    ],
+    "file": "/company/agents/growth-marketing/CONT-001.md"
+  },
+  {
+    "id": "COO-001",
+    "name": "COO",
+    "aliases": [
+      "COO"
+    ],
+    "team": "Executive Team",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "BOM-001",
+      "IT-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO and every department, especially Product, Engineering, GTM, Finance, HR, and Legal."
+    ],
+    "flow_primary_steps": [
+      "70",
+      "72"
+    ],
+    "flow_supporting_steps": [
+      "13",
+      "38",
+      "74",
+      "80"
+    ],
+    "file": "/company/agents/executive/COO-001.md"
+  },
+  {
+    "id": "CPO-001",
+    "name": "CPO / Head of Product",
+    "aliases": [
+      "Chief Product Officer",
+      "Head of Product",
+      "CPO / Head of Product",
+      "CPO"
+    ],
+    "team": "Product Team",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "DES-001",
+      "PA-001",
+      "PM-001",
+      "UXR-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO, Product Managers, UX, Engineering, AI/Data, Marketing, Sales, Customer Success."
+    ],
+    "flow_primary_steps": [
+      "14",
+      "15",
+      "63",
+      "75"
+    ],
+    "flow_supporting_steps": [
+      "01",
+      "02",
+      "10",
+      "11",
+      "13",
+      "16",
+      "21",
+      "22",
+      "30",
+      "38",
+      "52",
+      "61",
+      "80"
+    ],
+    "file": "/company/agents/product/CPO-001.md"
+  },
+  {
+    "id": "CRO-001",
+    "name": "CRO / Head of Sales",
+    "aliases": [
+      "Chief Revenue Officer",
+      "Head of Sales",
+      "CRO / Head of Sales",
+      "CRO"
+    ],
+    "team": "Sales / Revenue",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "AE-001",
+      "REVOPS-001",
+      "SDR-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO, Marketing, Product Marketing, Sales, Customer Success, Finance."
+    ],
+    "flow_primary_steps": [
+      "66",
+      "79"
+    ],
+    "flow_supporting_steps": [
+      "74",
+      "80"
+    ],
+    "file": "/company/agents/sales-revenue/CRO-001.md"
+  },
+  {
+    "id": "CSM-001",
+    "name": "Customer Success Manager",
+    "aliases": [
+      "Customer Success Manager",
+      "CSM"
+    ],
+    "team": "Customer Success",
+    "reports_to": "HCS-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Head of CS, Sales, Product, Support, Finance."
+    ],
+    "flow_primary_steps": [
+      "57",
+      "58"
+    ],
+    "flow_supporting_steps": [],
+    "file": "/company/agents/customer-success/CSM-001.md"
+  },
+  {
+    "id": "CTO-001",
+    "name": "CTO",
+    "aliases": [
+      "CTO"
+    ],
+    "team": "Executive Team",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "ARCH-001",
+      "DEVOPS-001",
+      "EM-001",
+      "HAI-001",
+      "SEC-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO, CPO/Product, Engineering, AI/Data, Security, Finance, and Operations."
+    ],
+    "flow_primary_steps": [
+      "30",
+      "54",
+      "68",
+      "69"
+    ],
+    "flow_supporting_steps": [
+      "02",
+      "13",
+      "15",
+      "19",
+      "29",
+      "34",
+      "38",
+      "49",
+      "55",
+      "74",
+      "80"
+    ],
+    "file": "/company/agents/executive/CTO-001.md"
+  },
+  {
+    "id": "CTRL-001",
+    "name": "Controller / Accounting Lead",
+    "aliases": [
+      "Controller",
+      "Accounting Lead"
+    ],
+    "team": "Finance",
+    "reports_to": "CFO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CFO, Sales, Finance Ops, HR, Legal, vendors."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [],
+    "file": "/company/agents/finance/CTRL-001.md"
+  },
+  {
+    "id": "DE-001",
+    "name": "Data Engineer",
+    "aliases": [
+      "Data Engineer"
+    ],
+    "team": "AI / Data",
+    "reports_to": "HAI-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Product Analytics, ML/AI, Backend, Security, Finance."
+    ],
+    "flow_primary_steps": [
+      "43"
+    ],
+    "flow_supporting_steps": [
+      "24",
+      "31"
+    ],
+    "file": "/company/agents/ai-data/DE-001.md"
+  },
+  {
+    "id": "DES-001",
+    "name": "Product Designer / UX-UI Designer",
+    "aliases": [
+      "Product Designer",
+      "UX/UI Designer",
+      "Designer"
+    ],
+    "team": "Design / UX",
+    "reports_to": "CPO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with PM, UX Research, Frontend Engineering, QA, Marketing/Brand."
+    ],
+    "flow_primary_steps": [
+      "25",
+      "26",
+      "27",
+      "28"
+    ],
+    "flow_supporting_steps": [
+      "17",
+      "18",
+      "21",
+      "22",
+      "36",
+      "41",
+      "50"
+    ],
+    "file": "/company/agents/design-ux/DES-001.md"
+  },
+  {
+    "id": "DEVOPS-001",
+    "name": "DevOps / SRE",
+    "aliases": [
+      "DevOps",
+      "SRE Engineer",
+      "DevOps / SRE"
+    ],
+    "team": "Engineering / Technology",
+    "reports_to": "CTO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CTO, Engineering, QA, Security, Finance, Operations."
+    ],
+    "flow_primary_steps": [
+      "39",
+      "55"
+    ],
+    "flow_supporting_steps": [
+      "29",
+      "35",
+      "37",
+      "40",
+      "45",
+      "49",
+      "54",
+      "56",
+      "68",
+      "69",
+      "78"
+    ],
+    "file": "/company/agents/engineering/DEVOPS-001.md"
+  },
+  {
+    "id": "EM-001",
+    "name": "Engineering Manager",
+    "aliases": [
+      "Engineering Manager"
+    ],
+    "team": "Engineering / Technology",
+    "reports_to": "CTO-001",
+    "can_delegate_to": [
+      "BE-001",
+      "FE-001",
+      "QA-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CTO, PMs, Tech Leads, QA, DevOps/SRE, AI/Data."
+    ],
+    "flow_primary_steps": [
+      "35",
+      "37",
+      "62",
+      "78"
+    ],
+    "flow_supporting_steps": [
+      "36",
+      "54"
+    ],
+    "file": "/company/agents/engineering/EM-001.md"
+  },
+  {
+    "id": "FE-001",
+    "name": "Frontend / Mobile Engineer",
+    "aliases": [
+      "Frontend",
+      "Mobile Engineer",
+      "Frontend / Mobile Engineer"
+    ],
+    "team": "Engineering / Technology",
+    "reports_to": "EM-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Product, Design, Backend, QA, DevOps/SRE."
+    ],
+    "flow_primary_steps": [
+      "41"
+    ],
+    "flow_supporting_steps": [
+      "28",
+      "29",
+      "32",
+      "43"
+    ],
+    "file": "/company/agents/engineering/FE-001.md"
+  },
+  {
+    "id": "FPA-001",
+    "name": "FP&A / Finance Analyst",
+    "aliases": [
+      "FP&A",
+      "Finance Analyst",
+      "FP&A / Finance Analyst"
+    ],
+    "team": "Finance",
+    "reports_to": "CFO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CFO, CEO, Product, Engineering, Marketing, Sales, HR, Operations."
+    ],
+    "flow_primary_steps": [
+      "12",
+      "60"
+    ],
+    "flow_supporting_steps": [],
+    "file": "/company/agents/finance/FPA-001.md"
+  },
+  {
+    "id": "GC-001",
+    "name": "General Counsel / Legal Lead",
+    "aliases": [
+      "General Counsel",
+      "Legal Lead",
+      "Legal"
+    ],
+    "team": "Legal / Security",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CEO, Sales, Finance, HR, Product, Security, Operations."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "34",
+      "71",
+      "76",
+      "77",
+      "79"
+    ],
+    "file": "/company/agents/legal-security/GC-001.md"
+  },
+  {
+    "id": "HAI-001",
+    "name": "Head of AI / ML Strategy",
+    "aliases": [
+      "Head of AI",
+      "Head of AI / ML"
+    ],
+    "team": "AI / Data",
+    "reports_to": "CTO-001",
+    "can_delegate_to": [
+      "AIE-001",
+      "AIEVAL-001",
+      "DE-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CTO, Product, ML Engineers, Data Engineers, AI Evaluation, Security, Finance."
+    ],
+    "flow_primary_steps": [
+      "20",
+      "33",
+      "68"
+    ],
+    "flow_supporting_steps": [
+      "42"
+    ],
+    "file": "/company/agents/ai-data/HAI-001.md"
+  },
+  {
+    "id": "HCS-001",
+    "name": "Head of Customer Success",
+    "aliases": [
+      "Head of Customer Success"
+    ],
+    "team": "Customer Success",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "CSM-001",
+      "SUP-001"
+    ],
+    "directly_supports_raw": [
+      "Works with Sales, Product, Support, Marketing, Finance, CEO."
+    ],
+    "flow_primary_steps": [
+      "53",
+      "67"
+    ],
+    "flow_supporting_steps": [],
+    "file": "/company/agents/customer-success/HCS-001.md"
+  },
+  {
+    "id": "HRH-001",
+    "name": "Head of People / HR",
+    "aliases": [
+      "Head of People",
+      "HR"
+    ],
+    "team": "People / HR",
+    "reports_to": "CEO-001",
+    "can_delegate_to": [
+      "TA-001"
+    ],
+    "directly_supports_raw": [
+      "Works with CEO, department heads, Finance, Legal, Operations."
+    ],
+    "flow_primary_steps": [
+      "71"
+    ],
+    "flow_supporting_steps": [
+      "70"
+    ],
+    "file": "/company/agents/people-hr/HRH-001.md"
+  },
+  {
+    "id": "IT-001",
+    "name": "IT / Internal Systems Administrator",
+    "aliases": [
+      "IT",
+      "Internal Systems Administrator"
+    ],
+    "team": "Operations",
+    "reports_to": "COO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with HR, Security, Finance, Operations, Engineering."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "39"
+    ],
+    "file": "/company/agents/operations/IT-001.md"
+  },
+  {
+    "id": "PA-001",
+    "name": "Product Analyst",
+    "aliases": [
+      "Product Analyst"
+    ],
+    "team": "Product Team",
+    "reports_to": "CPO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with PM, Data Engineering, Marketing/Growth, Sales, Customer Success, Finance."
+    ],
+    "flow_primary_steps": [
+      "06",
+      "16",
+      "24",
+      "59"
+    ],
+    "flow_supporting_steps": [
+      "43"
+    ],
+    "file": "/company/agents/product/PA-001.md"
+  },
+  {
+    "id": "PERF-001",
+    "name": "Performance / Lifecycle Marketer",
+    "aliases": [
+      "Performance",
+      "Lifecycle Marketer"
+    ],
+    "team": "Growth / Marketing",
+    "reports_to": "CMO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Growth Lead, Product, Sales, Customer Success, Analytics, Finance."
+    ],
+    "flow_primary_steps": [
+      "65"
+    ],
+    "flow_supporting_steps": [],
+    "file": "/company/agents/growth-marketing/PERF-001.md"
+  },
+  {
+    "id": "PM-001",
+    "name": "Product Manager",
+    "aliases": [
+      "Product Manager",
+      "PM"
+    ],
+    "team": "Product Team",
+    "reports_to": "CPO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CPO, UX, Engineering, QA, AI/Data, Marketing, Sales, Customer Success."
+    ],
+    "flow_primary_steps": [
+      "03",
+      "04",
+      "07",
+      "09",
+      "17",
+      "18",
+      "21",
+      "22",
+      "23",
+      "36",
+      "50",
+      "56",
+      "61",
+      "62",
+      "77"
+    ],
+    "flow_supporting_steps": [
+      "01",
+      "05",
+      "06",
+      "08",
+      "10",
+      "14",
+      "15",
+      "24",
+      "25",
+      "26",
+      "27",
+      "28",
+      "37",
+      "47",
+      "48",
+      "58",
+      "59"
+    ],
+    "file": "/company/agents/product/PM-001.md"
+  },
+  {
+    "id": "PMM-001",
+    "name": "Product Marketing Manager",
+    "aliases": [
+      "Product Marketing Manager",
+      "Product Marketing"
+    ],
+    "team": "Growth / Marketing",
+    "reports_to": "CMO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Product, Marketing, Sales, Customer Success, Design."
+    ],
+    "flow_primary_steps": [
+      "08",
+      "10",
+      "51",
+      "76"
+    ],
+    "flow_supporting_steps": [
+      "52",
+      "64",
+      "65",
+      "66",
+      "73"
+    ],
+    "file": "/company/agents/growth-marketing/PMM-001.md"
+  },
+  {
+    "id": "QA-001",
+    "name": "QA / Quality Engineer",
+    "aliases": [
+      "QA",
+      "Quality Engineer",
+      "QA / Quality Engineer"
+    ],
+    "team": "Engineering / Technology",
+    "reports_to": "EM-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with PM, Engineering, DevOps/SRE, Security, AI/Data."
+    ],
+    "flow_primary_steps": [
+      "47",
+      "48",
+      "49"
+    ],
+    "flow_supporting_steps": [
+      "22",
+      "23",
+      "28",
+      "32",
+      "36",
+      "37",
+      "41",
+      "42",
+      "43",
+      "46",
+      "50",
+      "54",
+      "55",
+      "61",
+      "62",
+      "69",
+      "78"
+    ],
+    "file": "/company/agents/engineering/QA-001.md"
+  },
+  {
+    "id": "REVOPS-001",
+    "name": "Revenue Operations / Sales Operations",
+    "aliases": [
+      "Revenue Operations",
+      "Sales Operations",
+      "RevOps"
+    ],
+    "team": "Sales / Revenue",
+    "reports_to": "CRO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CRO, Sales, Marketing Ops, Finance, Customer Success."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "66"
+    ],
+    "file": "/company/agents/sales-revenue/REVOPS-001.md"
+  },
+  {
+    "id": "SDR-001",
+    "name": "Sales Development / Lead Generation",
+    "aliases": [
+      "Sales Development",
+      "Lead Generation",
+      "SDR"
+    ],
+    "team": "Sales / Revenue",
+    "reports_to": "CRO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Sales AEs, Marketing, Product Marketing, RevOps."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "66"
+    ],
+    "file": "/company/agents/sales-revenue/SDR-001.md"
+  },
+  {
+    "id": "SEC-001",
+    "name": "Security / Privacy Lead",
+    "aliases": [
+      "Security",
+      "Privacy Lead",
+      "Security / Privacy Lead"
+    ],
+    "team": "Legal / Security",
+    "reports_to": "CTO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with CTO, Engineering, DevOps, AI/Data, Legal, Operations."
+    ],
+    "flow_primary_steps": [
+      "34",
+      "45"
+    ],
+    "flow_supporting_steps": [
+      "19",
+      "23",
+      "29",
+      "30",
+      "31",
+      "33",
+      "39",
+      "40",
+      "44",
+      "47",
+      "54",
+      "69",
+      "78"
+    ],
+    "file": "/company/agents/legal-security/SEC-001.md"
+  },
+  {
+    "id": "SUP-001",
+    "name": "Customer Support Agent / Support Specialist",
+    "aliases": [
+      "Customer Support Agent",
+      "Support Specialist",
+      "Support"
+    ],
+    "team": "Customer Success",
+    "reports_to": "HCS-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Customer Success, Engineering, Product, QA, AI Evaluation."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "53",
+      "57",
+      "67"
+    ],
+    "file": "/company/agents/customer-success/SUP-001.md"
+  },
+  {
+    "id": "TA-001",
+    "name": "Talent Acquisition / Recruiter",
+    "aliases": [
+      "Talent Acquisition",
+      "Recruiter"
+    ],
+    "team": "People / HR",
+    "reports_to": "HRH-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with Hiring Managers, HR, Finance, Legal, department leadership."
+    ],
+    "flow_primary_steps": [],
+    "flow_supporting_steps": [
+      "71"
+    ],
+    "file": "/company/agents/people-hr/TA-001.md"
+  },
+  {
+    "id": "UXR-001",
+    "name": "UX Researcher",
+    "aliases": [
+      "UX Researcher"
+    ],
+    "team": "Design / UX",
+    "reports_to": "CPO-001",
+    "can_delegate_to": [],
+    "directly_supports_raw": [
+      "Works with PM, Product Designer, Marketing, Sales, Customer Success, and Data."
+    ],
+    "flow_primary_steps": [
+      "05"
+    ],
+    "flow_supporting_steps": [
+      "03",
+      "04",
+      "17",
+      "18",
+      "25",
+      "26",
+      "27",
+      "58"
+    ],
+    "file": "/company/agents/design-ux/UXR-001.md"
+  }
+]
