@@ -18,22 +18,32 @@ function filePathFor(id: string): string {
 
 // In-memory cache so status polling during an active run doesn't have to
 // hit disk on every request; still persisted to disk after every step so
-// progress survives a server restart.
-const cache = new Map<string, RunState>();
+// progress survives a server restart. Entries expire after RUN_CACHE_TTL_MS
+// so a cache entry that's gone stale relative to disk (e.g. a dev-mode
+// module reload leaving a live request bound to an old module instance's
+// cache - this app has hit exactly that once) self-heals within a bounded
+// window instead of diverging from disk forever.
+const RUN_CACHE_TTL_MS = Number(process.env.RUN_CACHE_TTL_MS || 20 * 60 * 1000);
+const cache = new Map<string, { run: RunState; cachedAt: number }>();
 
 export function saveRun(run: RunState): void {
   ensureDir();
-  cache.set(run.id, run);
+  cache.set(run.id, { run, cachedAt: Date.now() });
   fs.writeFileSync(filePathFor(run.id), JSON.stringify(run, null, 2), "utf-8");
 }
 
 export function loadRun(id: string): RunState | null {
   const cached = cache.get(id);
-  if (cached) return cached;
+  if (cached) {
+    if (Date.now() - cached.cachedAt <= RUN_CACHE_TTL_MS) {
+      return cached.run;
+    }
+    cache.delete(id);
+  }
   const file = filePathFor(id);
   if (!fs.existsSync(file)) return null;
   const run = JSON.parse(fs.readFileSync(file, "utf-8")) as RunState;
-  cache.set(id, run);
+  cache.set(id, { run, cachedAt: Date.now() });
   return run;
 }
 

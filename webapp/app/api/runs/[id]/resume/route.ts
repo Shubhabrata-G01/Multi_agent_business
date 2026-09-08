@@ -2,11 +2,13 @@ import { NextResponse } from "next/server";
 import { resumeRun } from "@/lib/orchestrator";
 
 /**
- * Resumes a "held" run (a run that paused at a stage gate after exhausting
- * its bounded retries - see evaluateGate in webapp/lib/orchestrator.ts).
- * Since the API key is never persisted, the body may re-supply one; if
- * omitted, resumeRun falls back to the server env var, same as starting a
- * fresh run.
+ * Resumes a "held" run (paused at a stage gate - see evaluateGate in
+ * webapp/lib/orchestrator.ts) or a "failed" one (replays whatever step it
+ * failed on as a fresh attempt). The body may supply an apiKey; if omitted,
+ * resumeRun tries the short-lived in-memory key cache
+ * (webapp/lib/keyCache.ts) first, then the server env var, same as starting
+ * a fresh run - the "No API key supplied" error below is what the UI uses
+ * to decide whether to prompt for one.
  */
 export async function POST(
   request: Request,
@@ -30,7 +32,7 @@ export async function POST(
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("not found")
       ? 404
-      : message.includes("is not held")
+      : message.includes("cannot be resumed")
         ? 409
         : message.includes("No API key supplied")
           ? 400

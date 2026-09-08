@@ -18,6 +18,7 @@ import {
   parseReturnToStep,
 } from "./businessFlow";
 import { renderIntegrationNotice } from "./integrations";
+import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
 import type {
@@ -1126,6 +1127,9 @@ export function startRun(
   const id = crypto.randomUUID();
   const run = initRun(id, idea, provider, model, source);
   saveRun(run);
+  if (source === "user_provided") {
+    cacheApiKey(id, apiKey);
+  }
 
   executeRun(id, provider, model, apiKey).catch((err) => {
     const run2 = loadRun(id);
@@ -1143,22 +1147,32 @@ export function startRun(
 }
 
 /**
- * Resumes a "held" run from exactly the step it paused at
+ * Resumes a "held" or "failed" run from exactly the step it stopped at
  * (run.current_step_index, run.step_attempts, run.jump_counts, and
- * run.total_executions are all read back from disk by executeRun). Since the
- * API key is never persisted, resuming needs one supplied again (or falls
- * back to the server env var, same as a fresh run).
+ * run.total_executions are all read back from disk by executeRun - a
+ * "failed" step's tasks/status get reset fresh by executeRun's normal
+ * per-iteration setup, the same as any other (re-)execution of that step).
+ *
+ * The API key is never persisted to disk, but IS kept in an in-memory,
+ * TTL-expiring cache (webapp/lib/keyCache.ts) purely for resume/restart
+ * convenience - a caller that omits suppliedApiKey uses that cached key
+ * first, then falls back to the server env var, and only errors (prompting
+ * the UI to ask for one) if neither is available.
  */
 export function resumeRun(id: string, suppliedApiKey: string | undefined): void {
   const run = loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
-  if (run.status !== "held") {
-    throw new Error(`Run is not held (current status: ${run.status})`);
+  if (run.status !== "held" && run.status !== "failed") {
+    throw new Error(`Run cannot be resumed (current status: ${run.status})`);
   }
 
-  const { apiKey, source } = resolveApiKey(run.provider, suppliedApiKey);
+  const effectiveSuppliedKey = suppliedApiKey || getCachedApiKey(id) || undefined;
+  const { apiKey, source } = resolveApiKey(run.provider, effectiveSuppliedKey);
+  if (suppliedApiKey && source === "user_provided") {
+    cacheApiKey(id, suppliedApiKey);
+  }
   run.status = "running";
   run.key_source = source;
   run.error = null;

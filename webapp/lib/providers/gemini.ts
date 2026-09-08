@@ -1,5 +1,5 @@
 import type { ProviderCallParams, ProviderCallResult } from "./types";
-import { ProviderCallError } from "./types";
+import { PROVIDER_TIMEOUT_MS, ProviderCallError } from "./types";
 
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -27,6 +27,7 @@ export async function callGemini(
         contents: [{ role: "user", parts: [{ text: params.userMessage }] }],
         generationConfig: { maxOutputTokens: params.maxTokens },
       }),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
   } catch (err) {
     throw new ProviderCallError(

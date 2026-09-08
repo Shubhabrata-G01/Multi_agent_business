@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ProviderCallParams, ProviderCallResult } from "./types";
-import { ProviderCallError } from "./types";
+import { PROVIDER_TIMEOUT_MS, ProviderCallError } from "./types";
 
 const EFFORT = (process.env.ANTHROPIC_EFFORT || "high") as
   | "low"
@@ -12,7 +12,15 @@ const EFFORT = (process.env.ANTHROPIC_EFFORT || "high") as
 export async function callAnthropic(
   params: ProviderCallParams,
 ): Promise<ProviderCallResult> {
-  const client = new Anthropic({ apiKey: params.apiKey });
+  // maxRetries: 0 - this app's own retry loop (providers/index.ts) is the
+  // single source of retry truth. Left at the SDK default, a timeout gets
+  // retried *inside* the SDK too, compounding with the outer loop and
+  // producing multi-times-longer hangs than PROVIDER_TIMEOUT_MS implies.
+  const client = new Anthropic({
+    apiKey: params.apiKey,
+    timeout: PROVIDER_TIMEOUT_MS,
+    maxRetries: 0,
+  });
 
   let response;
   try {
@@ -24,8 +32,32 @@ export async function callAnthropic(
       system: params.systemPrompt,
       messages: [{ role: "user", content: params.userMessage }],
     });
-    response = await stream.finalMessage();
+
+    // Defense-in-depth on top of the client's own `timeout`: a streamed
+    // response's idle-time semantics aren't guaranteed to match a plain
+    // request's, so this races an explicit timer that aborts the stream
+    // directly rather than trusting the SDK alone to enforce the bound.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        stream.abort();
+        reject(
+          new ProviderCallError(
+            `Anthropic call exceeded ${PROVIDER_TIMEOUT_MS}ms and was aborted`,
+            true,
+          ),
+        );
+      }, PROVIDER_TIMEOUT_MS);
+    });
+    try {
+      response = await Promise.race([stream.finalMessage(), timeoutPromise]);
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (err) {
+    if (err instanceof ProviderCallError) {
+      throw err;
+    }
     if (
       err instanceof Anthropic.RateLimitError ||
       err instanceof Anthropic.APIConnectionError ||

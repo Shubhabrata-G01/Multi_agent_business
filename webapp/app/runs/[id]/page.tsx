@@ -149,7 +149,7 @@ export default function RunPage() {
   const [notFound, setNotFound] = useState(false);
   const [versionsByStep, setVersionsByStep] = useState<Record<string, ArtifactVersion[]>>({});
   const [resumeKey, setResumeKey] = useState("");
-  const [showResumeKeyInput, setShowResumeKeyInput] = useState(false);
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -201,26 +201,31 @@ export default function RunPage() {
     }
   }
 
-  async function handleResume() {
+  // Shared by both the "held" Resume button and a failed step's Restart
+  // button. Always tries without a key first - the server checks its
+  // short-lived key cache (webapp/lib/keyCache.ts) and the env var before
+  // ever asking us for one, so most resumes within that cache window
+  // succeed on this first call and the modal never opens.
+  async function attemptResume(keyOverride?: string) {
     setResuming(true);
     setResumeError(null);
     try {
       const res = await fetch(`/api/runs/${params.id}/resume`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(resumeKey ? { apiKey: resumeKey } : {}),
+        body: JSON.stringify(keyOverride ? { apiKey: keyOverride } : {}),
       });
       const data = await res.json();
       if (!res.ok) {
         if (typeof data.error === "string" && data.error.includes("No API key supplied")) {
-          setShowResumeKeyInput(true);
-          setResumeError("This run used a key you provided - enter it again to resume.");
+          setKeyModalOpen(true);
         } else {
           setResumeError(data.error ?? "Failed to resume run.");
         }
         return;
       }
-      setShowResumeKeyInput(false);
+      setKeyModalOpen(false);
+      setResumeKey("");
       poll();
     } catch {
       setResumeError("Failed to resume run.");
@@ -309,19 +314,66 @@ export default function RunPage() {
             Paused at step {lastPathEntry?.flow_step}: {lastPathEntry?.reason} Resumable —
             picks up exactly where it left off.
           </div>
-          {showResumeKeyInput && (
+          <button onClick={() => attemptResume()} disabled={resuming}>
+            {resuming ? "Resuming…" : "Resume"}
+          </button>
+          {resumeError && <div className="step-reason">{resumeError}</div>}
+        </div>
+      )}
+
+      {keyModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: 20,
+              width: 320,
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Enter API key</h3>
+            <p className="field-hint">
+              This run&apos;s key isn&apos;t in memory anymore (or was never supplied) -
+              paste it to continue.
+            </p>
             <input
               type="password"
               placeholder="API key"
               value={resumeKey}
               onChange={(e) => setResumeKey(e.target.value)}
-              style={{ marginRight: 8, padding: "4px 8px" }}
+              style={{ width: "100%", padding: "6px 8px", marginBottom: 10, boxSizing: "border-box" }}
+              autoFocus
             />
-          )}
-          <button onClick={handleResume} disabled={resuming}>
-            {resuming ? "Resuming…" : "Resume"}
-          </button>
-          {resumeError && <div className="step-reason">{resumeError}</div>}
+            {resumeError && <div className="step-reason">{resumeError}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => {
+                  setKeyModalOpen(false);
+                  setResumeError(null);
+                }}
+                disabled={resuming}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => attemptResume(resumeKey)}
+                disabled={resuming || !resumeKey.trim()}
+              >
+                {resuming ? "Continuing…" : "Continue"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -393,6 +445,14 @@ export default function RunPage() {
                   </div>
                 )}
                 {s.reason && <div className="step-reason">{s.reason}</div>}
+                {(s.status === "blocked" || s.status === "error") && run.status === "failed" && (
+                  <div style={{ margin: "8px 0" }}>
+                    <button onClick={() => attemptResume()} disabled={resuming}>
+                      {resuming ? "Restarting…" : "Restart this step"}
+                    </button>
+                    {resumeError && <div className="step-reason">{resumeError}</div>}
+                  </div>
+                )}
                 {s.content && <pre>{s.content}</pre>}
 
                 {s.attempt > 1 && (

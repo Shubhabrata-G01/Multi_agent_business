@@ -1,5 +1,5 @@
 import type { ProviderCallParams, ProviderCallResult } from "./types";
-import { ProviderCallError } from "./types";
+import { PROVIDER_TIMEOUT_MS, ProviderCallError } from "./types";
 
 // Matches Groq/OpenAI-compatible error text like:
 // "`max_tokens` must be less than or equal to `512`, the maximum value for
@@ -42,6 +42,7 @@ async function attemptOnce(
           { role: "user", content: params.userMessage },
         ],
       }),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
   } catch (err) {
     throw new ProviderCallError(
