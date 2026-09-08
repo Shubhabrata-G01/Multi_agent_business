@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ArtifactMeta } from "./types";
+import type { ArtifactMeta, Claim } from "./types";
 
 const ClaimSchema = z.object({
   type: z.enum([
@@ -22,6 +22,9 @@ const ArtifactMetaSchema = z.object({
   claims: z.array(ClaimSchema).default([]),
   open_questions: z.array(z.string()).default([]),
   reason: z.string().nullable().optional().default(null),
+  // Never supplied by the model - always starts empty and is filled in by
+  // validateArtifactMeta() after parsing.
+  validation_notes: z.array(z.string()).default([]),
 });
 
 const FENCE_RE = /```artifact-meta\s*([\s\S]*?)```\s*$/i;
@@ -35,7 +38,46 @@ export function defaultArtifactMeta(reason: string): ArtifactMeta {
     claims: [],
     open_questions: [],
     reason,
+    validation_notes: [],
   };
+}
+
+/**
+ * Deterministic, non-negotiable check applied after every parse - the model
+ * self-reports confidence/evidence_quality/claim labels, but a claim tagged
+ * FACT with no source is downgraded regardless of what it says about itself.
+ * This is what "evidence must be verified, not merely self-described" means
+ * in a run with no live tool access to actually check a source: it can't
+ * confirm a citation is real, but it can refuse to let an uncited assertion
+ * carry FACT-level weight. Every change is recorded in validation_notes, not
+ * applied silently.
+ */
+export function validateArtifactMeta(meta: ArtifactMeta): ArtifactMeta {
+  let unsourcedFacts = 0;
+  const claims: Claim[] = meta.claims.map((claim) => {
+    if (claim.type === "fact" && !claim.source) {
+      unsourcedFacts += 1;
+      return { ...claim, type: "assumption" };
+    }
+    return claim;
+  });
+
+  const notes = [...meta.validation_notes];
+  let evidence_quality = meta.evidence_quality;
+
+  if (unsourcedFacts > 0) {
+    notes.push(
+      `Downgraded ${unsourcedFacts} unsourced FACT claim(s) to ASSUMPTION - no external ` +
+        "tool access is connected in this run to verify a source " +
+        "(company/architecture/07-mcp-tool-integration-policy.md).",
+    );
+    if (evidence_quality === "high") {
+      evidence_quality = "medium";
+      notes.push("Capped evidence_quality at medium because unsourced FACT claim(s) were present.");
+    }
+  }
+
+  return { ...meta, claims, evidence_quality, validation_notes: notes };
 }
 
 // company/architecture/09-quality-and-confidence-standards.md's FACT/ASSUMPTION/

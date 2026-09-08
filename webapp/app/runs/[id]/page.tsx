@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
-type TaskRole = "creator" | "critic" | "approver" | "executor";
+type TaskRole = "creator" | "critic" | "approver" | "executor" | "contributor";
 type TaskVerdict = "approved" | "changes_requested" | "rejected" | null;
 type StepStatus = "pending" | "running" | "done" | "blocked" | "error";
 type Confidence = "high" | "medium" | "low";
@@ -18,6 +18,7 @@ interface ArtifactMeta {
   claims: { type: string; text: string; source: string | null }[];
   open_questions: string[];
   reason: string | null;
+  validation_notes: string[];
 }
 
 interface StepTask {
@@ -28,6 +29,7 @@ interface StepTask {
   content: string | null;
   verdict: TaskVerdict;
   reason: string | null;
+  model: string;
 }
 
 interface StepResult {
@@ -71,6 +73,7 @@ const ROLE_LABELS: Record<TaskRole, string> = {
   critic: "Critic",
   approver: "Approver",
   executor: "Executor",
+  contributor: "Contributor",
 };
 
 const GATE_ACTION_LABELS: Record<GateAction, string> = {
@@ -101,7 +104,7 @@ function confidenceBadgeClass(c: Confidence): string {
 interface RunState {
   id: string;
   idea: string;
-  status: "running" | "completed" | "failed" | "stopped_no_go" | "held";
+  status: "running" | "completed" | "failed" | "stopped_no_go" | "held" | "cancelled";
   created_at: string;
   updated_at: string;
   current_step_index: number;
@@ -127,6 +130,7 @@ const STATUS_LABELS: Record<RunState["status"], string> = {
   failed: "Build stopped",
   stopped_no_go: "Stopped — No-Go decision",
   held: "Paused at a stage gate",
+  cancelled: "Cancelled",
 };
 
 function groupByPhase(steps: StepResult[]): [string, StepResult[]][] {
@@ -148,6 +152,7 @@ export default function RunPage() {
   const [showResumeKeyInput, setShowResumeKeyInput] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
 
@@ -224,6 +229,16 @@ export default function RunPage() {
     }
   }
 
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await fetch(`/api/runs/${params.id}/cancel`, { method: "POST" });
+      poll();
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (notFound) {
     return (
       <main>
@@ -272,6 +287,12 @@ export default function RunPage() {
         {doneCount} / {run.total_steps} steps complete
         {run.status === "running" && " — refreshing automatically"}
       </p>
+
+      {(run.status === "running" || run.status === "held") && (
+        <button onClick={handleCancel} disabled={cancelling} style={{ marginBottom: 16 }}>
+          {cancelling ? "Cancelling…" : "Cancel run"}
+        </button>
+      )}
 
       {run.error && <div className="top-error">{run.error}</div>}
 
@@ -358,6 +379,13 @@ export default function RunPage() {
                     {s.meta.claims.length > 0 && ` · ${s.meta.claims.length} tagged claim(s)`}
                   </div>
                 )}
+                {s.meta && s.meta.validation_notes.length > 0 && (
+                  <div className="step-reason">
+                    {s.meta.validation_notes.map((n, i) => (
+                      <div key={i}>{n}</div>
+                    ))}
+                  </div>
+                )}
                 {s.gate_decision && s.gate_decision !== "advance" && (
                   <div className="step-reason">
                     Gate: {GATE_ACTION_LABELS[s.gate_decision]}
@@ -400,13 +428,16 @@ export default function RunPage() {
                 {s.tasks && s.tasks.length > 0 && (
                   <div className="task-list">
                     <div className="task-list-title">
-                      Creator → Critic → Approver → Executor
+                      Creator → Critic → Contributor → Approver → Executor
                     </div>
                     {s.tasks.map((t, idx) => (
                       <details className="task" key={`${t.role}-${t.agent_id}-${idx}`}>
                         <summary>
                           <span className="task-role">{ROLE_LABELS[t.role]}</span>
                           <span className="task-agent">{t.agent_name}</span>
+                          {t.model && t.model !== run.model && (
+                            <span className="badge pending">{t.model}</span>
+                          )}
                           <span className={`badge ${taskBadgeClass(t)}`}>
                             {taskBadgeLabel(t)}
                           </span>

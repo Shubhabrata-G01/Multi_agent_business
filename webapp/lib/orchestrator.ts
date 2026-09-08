@@ -3,6 +3,7 @@ import {
   ARTIFACT_META_INSTRUCTIONS,
   defaultArtifactMeta,
   parseArtifactMeta,
+  validateArtifactMeta,
 } from "./artifactMeta";
 import { recordGateDecision, saveArtifactVersion } from "./artifactStore";
 import {
@@ -16,6 +17,7 @@ import {
   isGateStep,
   parseReturnToStep,
 } from "./businessFlow";
+import { renderIntegrationNotice } from "./integrations";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
 import type {
@@ -46,6 +48,7 @@ const EXECUTOR_MAX_TOKENS = Number(process.env.LLM_EXECUTOR_MAX_TOKENS || 800);
 // for any one step today; this is an easy dial to trade coverage for cost if
 // that changes.
 const MAX_CRITICS_PER_STEP = Number(process.env.MAX_CRITICS_PER_STEP || 6);
+const CONTRIBUTOR_MAX_TOKENS = Number(process.env.LLM_CONTRIBUTOR_MAX_TOKENS || 3000);
 // How many immediately preceding artifacts get passed to the model in full;
 // everything older is passed as a one-line snippet. Keeps per-call context
 // (and cost) roughly bounded even as steps repeat instead of growing unbounded.
@@ -58,6 +61,60 @@ const SNIPPET_LENGTH = 220;
 const MAX_RETRIES_PER_STEP = Number(process.env.MAX_RETRIES_PER_STEP || 2);
 const MAX_JUMPS_PER_TARGET = Number(process.env.MAX_JUMPS_PER_TARGET || 1);
 const MAX_TOTAL_STEP_EXECUTIONS = Number(process.env.MAX_TOTAL_STEP_EXECUTIONS || 200);
+// A generous safety-net token ceiling across the whole run (sum of every
+// task's input+output tokens), independent of MAX_TOTAL_STEP_EXECUTIONS -
+// lets an operator cap spend directly instead of only bounding call count.
+// Held (not failed) when hit, same as the execution ceiling.
+const MAX_RUN_TOTAL_TOKENS = Number(process.env.MAX_RUN_TOTAL_TOKENS || 8_000_000);
+
+// Executor calls are short, low-stakes handoff directives - exactly
+// 06-model-routing-policy.md's "Secondary Model" use case - so they route to
+// a cheaper/faster sibling model of the same provider when one is confidently
+// known. Anthropic's Haiku id is verified current in this environment; the
+// other three providers have no confidently-known cheap sibling here, so they
+// default to undefined (use the run's primary model) rather than guess a
+// model id that might not exist - a wrong guess just errors at call time.
+// Operators can opt in via env var once they know a valid one.
+const ECONOMY_MODEL_OVERRIDE: Partial<Record<LLMProvider, string>> = {
+  anthropic: process.env.ECONOMY_MODEL_ANTHROPIC || "claude-haiku-4-5-20251001",
+  groq: process.env.ECONOMY_MODEL_GROQ || undefined,
+  openrouter: process.env.ECONOMY_MODEL_OPENROUTER || undefined,
+  gemini: process.env.ECONOMY_MODEL_GEMINI || undefined,
+};
+
+function economyModelFor(provider: LLMProvider, fallbackModel: string): string {
+  return ECONOMY_MODEL_OVERRIDE[provider] || fallbackModel;
+}
+
+// Curated (not auto-inferred) - the specialist agents from registry.json with
+// zero flow_primary_steps get a real, specifically-framed sub-artifact on the
+// step where their actual function fits, instead of only ever critiquing
+// someone else's. See webapp/lib/orchestrator.ts's "contributor" execution
+// block below.
+interface ContributorSpec {
+  agentId: string;
+  label: string;
+}
+
+const STEP_CONTRIBUTORS: Record<string, ContributorSpec[]> = {
+  "39": [{ agentId: "IT-001", label: "Internal Access & Identity Setup Checklist" }],
+  "53": [{ agentId: "SUP-001", label: "Support Playbook & Escalation SOP" }],
+  "65": [{ agentId: "CONT-001", label: "SEO/Content Angle Brief" }],
+  "66": [
+    { agentId: "SDR-001", label: "Outbound Qualification Playbook" },
+    { agentId: "AE-001", label: "Discovery-to-Close Playbook" },
+    { agentId: "REVOPS-001", label: "Pipeline & Forecast Operating Cadence" },
+  ],
+  "71": [
+    { agentId: "TA-001", label: "Candidate Sourcing & Screening Plan" },
+    { agentId: "GC-001", label: "Employment Offer & Compliance Checklist" },
+  ],
+  "74": [{ agentId: "CTRL-001", label: "Books & Financial Controls Readiness Note" }],
+  "79": [
+    { agentId: "BOM-001", label: "Partner Operations Plan" },
+    { agentId: "GC-001", label: "Partner Agreement Legal Checklist" },
+  ],
+};
 
 function runtimeNotice(provider: LLMProvider, roleInstructions: string): string {
   return `---
@@ -67,17 +124,18 @@ function runtimeNotice(provider: LLMProvider, roleInstructions: string): string 
 You are being invoked headlessly through the ${PROVIDER_LABELS[provider]} API
 as one step in an automated, unattended pipeline that is building a real
 business end to end from a single idea, autonomously, with no human
-reviewing each step before the next one runs. You have NO filesystem
-access, NO tools, and cannot read any other file mentioned in your spec
-above (including the company/architecture/ and company/workflow/ documents
-it references) - rely only on your spec above and the context given to you
-in the user message. Because this run is fully autonomous, do not defer a
-decision to "a human" or pause for approval even where your spec's Human
-Approval Requirements section would normally require it in a
-human-operated version of this organization - make the best call yourself,
-state it as a clear DECISION with your reasoning and confidence, and move
-the business forward. Note any real-world risk of that autonomy in your
-output rather than silently absorbing it.
+reviewing each step before the next one runs. You cannot read any other file
+mentioned in your spec above (including the company/architecture/ and
+company/workflow/ documents it references) - rely only on your spec above and
+the context given to you in the user message. Because this run is fully
+autonomous, do not defer a decision to "a human" or pause for approval even
+where your spec's Human Approval Requirements section would normally require
+it in a human-operated version of this organization - make the best call
+yourself, state it as a clear DECISION with your reasoning and confidence,
+and move the business forward. Note any real-world risk of that autonomy in
+your output rather than silently absorbing it.
+
+${renderIntegrationNotice()}
 
 ${roleInstructions}`;
 }
@@ -108,6 +166,14 @@ or asserted?), risks, cost, security, scalability, business alignment,
 user value, compliance, maintainability. If you find nothing wrong, state
 explicitly which of these you checked and why each passed - not just
 "looks good." You do not fix the artifact yourself, only review it.
+
+You will be shown the artifact's self-labeled claims (FACT/ASSUMPTION/
+ESTIMATE/INFERENCE/RECOMMENDATION/DECISION, each with a source or "NO SOURCE
+GIVEN"). Specifically check each one: does its label match its actual
+evidentiary strength? A claim asserted as FACT but really a guess, or backed
+by an implausible/fabricated-sounding source, is exactly the kind of finding
+that warrants CHANGES_REQUESTED - evidence must be verified, not merely
+self-described.
 
 Respond with your findings as Markdown, then end with exactly one of these
 two lines, on its own line:
@@ -157,6 +223,48 @@ of these two lines, on its own line:
 STATUS: OK
 STATUS: BLOCKED | REASON: <one sentence>`,
 )}`;
+}
+
+function buildContributorSystemPrompt(
+  agentSpecText: string,
+  provider: LLMProvider,
+  label: string,
+): string {
+  return `${agentSpecText}
+
+${runtimeNotice(
+  provider,
+  `You are acting as CONTRIBUTOR on this step, alongside its primary Creator -
+your job is to produce your OWN specific artifact contribution, "${label}",
+not to review, restate, or summarize the Creator's work. Bring your role's
+actual expertise to bear as if this were work you genuinely own end to end.
+
+Respond with your "${label}" contribution, in full, as Markdown - no
+preamble, no "Here is the artifact" framing.
+
+${ARTIFACT_META_INSTRUCTIONS}`,
+)}`;
+}
+
+function buildContributorUserMessage(
+  step: FlowStepDef,
+  creatorArtifact: string,
+  label: string,
+): string {
+  return `Step ${step.flow_step} - "${step.activity}" (${step.business_phase}).
+
+The step's primary "${step.output_artifact}" artifact, produced by this
+step's Creator, for context (you are not reviewing or revising this - it's
+background):
+
+---
+
+${creatorArtifact}
+
+---
+
+Produce your own "${label}" contribution now - a distinct, focused artifact
+from your role's perspective that complements the above.`;
 }
 
 function summarize(text: string): string {
@@ -298,9 +406,22 @@ real; a low-confidence artifact that says so plainly is more useful than a
 falsely confident one. Produce a fresh "${step.output_artifact}" now.`;
 }
 
-function buildCriticUserMessage(step: FlowStepDef, artifact: string): string {
+function renderClaimsForReview(meta: ArtifactMeta): string {
+  if (meta.claims.length === 0) return "(creator tagged no claims)";
+  return meta.claims
+    .map(
+      (c, i) =>
+        `${i + 1}. [${c.type.toUpperCase()}] ${c.text} ${c.source ? `(source: ${c.source})` : "(NO SOURCE GIVEN)"}`,
+    )
+    .join("\n");
+}
+
+function buildCriticUserMessage(step: FlowStepDef, artifact: string, meta: ArtifactMeta): string {
   return `Step ${step.flow_step} - "${step.activity}" (${step.business_phase}).
 Done/gate criteria for this artifact: ${step.done_gate_criteria}
+
+The creator self-labeled these claims (confidence: ${meta.confidence}, evidence_quality: ${meta.evidence_quality}):
+${renderClaimsForReview(meta)}
 
 The artifact under review, "${step.output_artifact}":
 
@@ -354,7 +475,7 @@ function parseLabeledResponse(text: string, label: string, values: string[]): Pa
   };
 }
 
-function newTask(role: TaskRole, agent: RegistryAgent): StepTask {
+function newTask(role: TaskRole, agent: RegistryAgent, model: string): StepTask {
   return {
     role,
     agent_id: agent.id,
@@ -368,6 +489,7 @@ function newTask(role: TaskRole, agent: RegistryAgent): StepTask {
     input_tokens: null,
     output_tokens: null,
     meta: null,
+    model,
   };
 }
 
@@ -399,7 +521,7 @@ async function runTask(
   apiKey: string,
   labelConfig: RunTaskLabel,
 ): Promise<StepTask> {
-  const task = newTask(role, agent);
+  const task = newTask(role, agent, model);
   run.steps[stepIndex].tasks.push(task);
   saveRun(run);
 
@@ -418,10 +540,11 @@ async function runTask(
 
     if (labelConfig.label === "ARTIFACT_META") {
       const { content, meta } = parseArtifactMeta(result.text);
+      const validated = validateArtifactMeta(meta);
       task.content = content;
-      task.meta = meta;
-      task.reason = meta.reason;
-      task.status = meta.status === "blocked" ? "blocked" : "done";
+      task.meta = validated;
+      task.reason = validated.reason;
+      task.status = validated.status === "blocked" ? "blocked" : "done";
     } else {
       const { value, content, reason } = parseLabeledResponse(
         result.text,
@@ -449,6 +572,16 @@ async function runTask(
 
   saveRun(run);
   return task;
+}
+
+function sumRunTokens(run: RunState): number {
+  let total = 0;
+  for (const step of run.steps) {
+    for (const task of step.tasks) {
+      total += (task.input_tokens ?? 0) + (task.output_tokens ?? 0);
+    }
+  }
+  return total;
 }
 
 interface GateResult {
@@ -614,6 +747,21 @@ async function executeRun(
       return;
     }
 
+    if (sumRunTokens(run) >= MAX_RUN_TOTAL_TOKENS) {
+      run.status = "held";
+      run.error = null;
+      run.path.push({
+        flow_step: run.steps[run.current_step_index]?.flow_step ?? "",
+        attempt: 0,
+        decision: "held",
+        reason: `Run-wide token budget ceiling reached (${MAX_RUN_TOTAL_TOKENS.toLocaleString()} tokens).`,
+        at: new Date().toISOString(),
+      });
+      run.updated_at = new Date().toISOString();
+      saveRun(run);
+      return;
+    }
+
     const pc = run.current_step_index;
     const stepDef = flowSteps[pc];
     const stepResult = run.steps[pc];
@@ -700,7 +848,7 @@ async function executeRun(
               "critic",
               critic,
               buildCriticSystemPrompt(getAgentSpecText(critic.id), provider),
-              buildCriticUserMessage(stepDef, workingContent),
+              buildCriticUserMessage(stepDef, workingContent, creatorMeta),
               CRITIC_MAX_TOKENS,
               provider,
               model,
@@ -744,6 +892,41 @@ async function executeRun(
           // landing shouldn't take down a whole run; evaluateGate below
           // still sees the unresolved critic verdicts either way.
         }
+      }
+
+      // 2b. CONTRIBUTORS (parallel) - specialist agents that author their own
+      // labeled sub-artifact on specific steps (STEP_CONTRIBUTORS above),
+      // rather than only ever reviewing someone else's. Their sections are
+      // appended to workingContent, so they're part of what gets saved to
+      // the artifact store and what any later step reads as context.
+      const contributors = STEP_CONTRIBUTORS[stepDef.flow_step] ?? [];
+      if (contributors.length > 0) {
+        const contributorTasks = await Promise.all(
+          contributors.map((c) => {
+            const agent = getAgentById(c.agentId);
+            if (!agent) {
+              throw new Error(`Unknown contributor agent id: ${c.agentId}`);
+            }
+            return runTask(
+              run,
+              pc,
+              "contributor",
+              agent,
+              buildContributorSystemPrompt(getAgentSpecText(agent.id), provider, c.label),
+              buildContributorUserMessage(stepDef, workingContent, c.label),
+              CONTRIBUTOR_MAX_TOKENS,
+              provider,
+              model,
+              apiKey,
+              { label: "ARTIFACT_META" },
+            );
+          }),
+        );
+        contributorTasks.forEach((task, idx) => {
+          if (task.status === "done" && task.content) {
+            workingContent += `\n\n---\n\n## ${contributors[idx].label} (contributed by ${task.agent_name})\n\n${task.content}`;
+          }
+        });
       }
 
       // 3. APPROVER (gate steps only, when the creator has a resolvable manager)
@@ -813,7 +996,7 @@ async function executeRun(
               buildExecutorUserMessage(stepDef, nextStepDef, workingContent),
               EXECUTOR_MAX_TOKENS,
               provider,
-              model,
+              economyModelFor(provider, model),
               apiKey,
               { label: "STATUS", values: ["OK", "BLOCKED"] },
             );
@@ -993,4 +1176,24 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
       saveRun(run2);
     }
   });
+}
+
+/**
+ * Cancels a running or held run. The executeRun loop already checks
+ * `run.status !== "running"` at the top of every iteration (that's what
+ * makes "held" work), so setting status to "cancelled" here is sufficient -
+ * the in-flight loop (if any) returns on its own within one iteration
+ * boundary rather than being killed mid-call.
+ */
+export function cancelRun(id: string): void {
+  const run = loadRun(id);
+  if (!run) {
+    throw new Error("Run not found");
+  }
+  if (run.status !== "running" && run.status !== "held") {
+    throw new Error(`Run cannot be cancelled (current status: ${run.status})`);
+  }
+  run.status = "cancelled";
+  run.updated_at = new Date().toISOString();
+  saveRun(run);
 }

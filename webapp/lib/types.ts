@@ -31,7 +31,10 @@ export type StepStatus = "pending" | "running" | "done" | "blocked" | "error";
 // company/architecture/08-four-eyes-and-critic-mode.md: the same agent may hold more
 // than one of these across different steps, but a single step never lets one agent
 // play more than one role on its own artifact.
-export type TaskRole = "creator" | "critic" | "approver" | "executor";
+// "contributor" is a specialist agent that authors its own labeled sub-artifact
+// on a step (see STEP_CONTRIBUTORS in orchestrator.ts) - distinct from "critic",
+// which only reviews another agent's work and never creates its own.
+export type TaskRole = "creator" | "critic" | "approver" | "executor" | "contributor";
 
 // Only set on critic/approver tasks - null for creator/executor, which don't render a
 // verdict.
@@ -49,9 +52,14 @@ export interface StepTask {
   finished_at: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
-  // Set only on creator/revision tasks (parsed from the trailing artifact-meta
-  // block) - null for critic/approver/executor tasks.
+  // Set only on creator/revision/contributor tasks (parsed from the trailing
+  // artifact-meta block) - null for critic/approver/executor tasks.
   meta: ArtifactMeta | null;
+  // The model that actually produced this task's response - roles can be
+  // routed to a different model than the run's primary one (see
+  // ECONOMY_MODEL_OVERRIDE in orchestrator.ts), so this is per-task, not just
+  // read off RunState.model.
+  model: string;
 }
 
 // company/architecture/09-quality-and-confidence-standards.md's claim taxonomy.
@@ -80,6 +88,11 @@ export interface ArtifactMeta {
   claims: Claim[];
   open_questions: string[];
   reason: string | null; // set when status is "blocked"
+  // Filled in by validateArtifactMeta() (webapp/lib/artifactMeta.ts) - what a
+  // deterministic post-check changed and why (e.g. downgrading an unsourced
+  // FACT claim to ASSUMPTION). Never a silent rewrite - empty if nothing was
+  // changed.
+  validation_notes: string[];
 }
 
 // What evaluateGate() decided after a step's Creator(+Critic+Approver) finished -
@@ -113,7 +126,13 @@ export interface StepResult {
   gate_reason: string | null;
 }
 
-export type RunStatus = "running" | "completed" | "failed" | "stopped_no_go" | "held";
+export type RunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "stopped_no_go"
+  | "held"
+  | "cancelled";
 
 export type LLMProvider = "anthropic" | "groq" | "openrouter" | "gemini";
 
