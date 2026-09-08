@@ -3,6 +3,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
+type TaskRole = "creator" | "critic" | "approver" | "executor";
+type TaskVerdict = "approved" | "changes_requested" | "rejected" | null;
+type StepStatus = "pending" | "running" | "done" | "blocked" | "error";
+
+interface StepTask {
+  role: TaskRole;
+  agent_id: string;
+  agent_name: string;
+  status: StepStatus;
+  content: string | null;
+  verdict: TaskVerdict;
+  reason: string | null;
+}
+
 interface StepResult {
   flow_step: string;
   business_phase: string;
@@ -10,9 +24,29 @@ interface StepResult {
   agent_id: string;
   agent_name: string;
   output_artifact: string;
-  status: "pending" | "running" | "done" | "blocked" | "error";
+  status: StepStatus;
   content: string | null;
   reason: string | null;
+  tasks: StepTask[];
+  is_gate: boolean;
+}
+
+const ROLE_LABELS: Record<TaskRole, string> = {
+  creator: "Creator",
+  critic: "Critic",
+  approver: "Approver",
+  executor: "Executor",
+};
+
+function taskBadgeClass(task: StepTask): string {
+  if (task.verdict === "approved") return "done";
+  if (task.verdict === "changes_requested" || task.verdict === "rejected") return "blocked";
+  return task.status;
+}
+
+function taskBadgeLabel(task: StepTask): string {
+  if (task.verdict) return task.verdict.replace("_", " ");
+  return task.status;
 }
 
 interface RunState {
@@ -151,6 +185,7 @@ export default function RunPage() {
                 <span className="step-no">{s.flow_step}</span>
                 <span className="step-activity">{s.activity}</span>
                 <span className="step-agent">{s.agent_name}</span>
+                {s.is_gate && <span className="badge pending">gate</span>}
                 <span className={`badge ${s.status}`}>{s.status}</span>
               </summary>
               <div className="step-body">
@@ -159,6 +194,29 @@ export default function RunPage() {
                 </div>
                 {s.reason && <div className="step-reason">{s.reason}</div>}
                 {s.content && <pre>{s.content}</pre>}
+
+                {s.tasks && s.tasks.length > 0 && (
+                  <div className="task-list">
+                    <div className="task-list-title">
+                      Creator → Critic → Approver → Executor
+                    </div>
+                    {s.tasks.map((t, idx) => (
+                      <details className="task" key={`${t.role}-${t.agent_id}-${idx}`}>
+                        <summary>
+                          <span className="task-role">{ROLE_LABELS[t.role]}</span>
+                          <span className="task-agent">{t.agent_name}</span>
+                          <span className={`badge ${taskBadgeClass(t)}`}>
+                            {taskBadgeLabel(t)}
+                          </span>
+                        </summary>
+                        <div className="task-body">
+                          {t.reason && <div className="step-reason">{t.reason}</div>}
+                          {t.content && <pre>{t.content}</pre>}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                )}
               </div>
             </details>
           ))}

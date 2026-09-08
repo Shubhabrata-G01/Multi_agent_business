@@ -14,7 +14,7 @@ const PROVIDER_LABELS: Record<LLMProvider, string> = {
 
 const PROVIDER_DEFAULT_MODEL: Record<LLMProvider, string> = {
   anthropic: "claude-opus-5",
-  groq: "meta-llama/llama-prompt-guard-2-86m",
+  groq: "llama-3.3-70b-versatile",
   openrouter: "anthropic/claude-sonnet-5",
   gemini: "gemini-2.5-pro",
 };

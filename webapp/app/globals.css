@@ -305,6 +305,77 @@ details.step > summary::-webkit-details-marker {
   margin-top: 6px;
 }
 
+.task-list {
+  margin-top: 14px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+
+.task-list-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+details.task {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+details.task > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+}
+
+details.task > summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-role {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.task-agent {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-body {
+  padding: 2px 10px 10px 78px;
+  border-top: 1px solid var(--border);
+}
+
+.task-body pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: var(--panel);
+  padding: 10px;
+  border-radius: 6px;
+  margin: 6px 0 0;
+}
+
 .top-error {
   background: #2a1418;
   border: 1px solid #5c2530;

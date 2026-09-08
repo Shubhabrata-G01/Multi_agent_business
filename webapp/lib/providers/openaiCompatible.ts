@@ -6,6 +6,20 @@ import { ProviderCallError } from "./types";
 // `max_tokens` is less than the `context_window` for this model"
 const MAX_TOKENS_LIMIT_RE = /max_tokens.{0,40}less than or equal to `?(\d+)`?/i;
 
+// The "reduce the length" form (unlike the max_tokens form above) doesn't
+// state a number - it means the request as a whole (system + user message)
+// already exceeds the model's total context window before generation even
+// starts. There's nothing to auto-retry with here (this app can't safely
+// shrink an agent's system prompt), so this just makes the resulting error
+// diagnosable instead of a bare passthrough.
+const CONTEXT_TOO_LONG_RE = /reduce the length of the (messages|completion)/i;
+
+// Rough token estimate (~4 chars/token for English) - good enough to tell
+// someone "this is why it doesn't fit," not a precise count.
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
 async function attemptOnce(
   baseUrl: string,
   extraHeaders: Record<string, string>,
@@ -94,12 +108,25 @@ export async function callOpenAICompatible(
     return await attemptOnce(baseUrl, extraHeaders, params);
   } catch (err) {
     const bodyText = (err as { bodyText?: string })?.bodyText;
-    const match = bodyText?.match(MAX_TOKENS_LIMIT_RE);
-    const limit = match ? Number(match[1]) : null;
 
+    const maxTokensMatch = bodyText?.match(MAX_TOKENS_LIMIT_RE);
+    const limit = maxTokensMatch ? Number(maxTokensMatch[1]) : null;
     if (limit && limit > 0 && limit < params.maxTokens) {
       return attemptOnce(baseUrl, extraHeaders, { ...params, maxTokens: limit });
     }
+
+    if (bodyText && CONTEXT_TOO_LONG_RE.test(bodyText)) {
+      const promptTokens = estimateTokens(params.systemPrompt + params.userMessage);
+      throw new ProviderCallError(
+        `${params.model} rejected this request as too long for its context window ` +
+          `(estimated ~${promptTokens} prompt tokens + up to ${params.maxTokens} requested output tokens). ` +
+          `This model's total context window is too small for this agent's system prompt - ` +
+          `pick a model with a larger context window (e.g. llama-3.3-70b-versatile on Groq has 128K) ` +
+          `rather than retrying, since this app can't safely shorten an agent's spec. Raw error: ${bodyText.slice(0, 300)}`,
+        false,
+      );
+    }
+
     throw err;
   }
 }

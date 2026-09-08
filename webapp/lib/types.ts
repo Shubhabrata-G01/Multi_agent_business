@@ -27,20 +27,46 @@ export interface FlowStepDef {
 
 export type StepStatus = "pending" | "running" | "done" | "blocked" | "error";
 
-export interface StepResult {
-  flow_step: string;
-  business_phase: string;
-  activity: string;
+// The four separated functions from
+// company/architecture/08-four-eyes-and-critic-mode.md: the same agent may hold more
+// than one of these across different steps, but a single step never lets one agent
+// play more than one role on its own artifact.
+export type TaskRole = "creator" | "critic" | "approver" | "executor";
+
+// Only set on critic/approver tasks - null for creator/executor, which don't render a
+// verdict.
+export type TaskVerdict = "approved" | "changes_requested" | "rejected" | null;
+
+export interface StepTask {
+  role: TaskRole;
   agent_id: string;
   agent_name: string;
-  output_artifact: string;
   status: StepStatus;
-  content: string | null; // the artifact text produced (markdown)
+  content: string | null; // artifact text, review findings, or execution directive
+  verdict: TaskVerdict;
   reason: string | null; // populated when status is blocked/error
   started_at: string | null;
   finished_at: string | null;
   input_tokens: number | null;
   output_tokens: number | null;
+}
+
+export interface StepResult {
+  flow_step: string;
+  business_phase: string;
+  activity: string;
+  agent_id: string; // the Creator's agent id
+  agent_name: string; // the Creator's agent name
+  output_artifact: string;
+  status: StepStatus; // overall step status
+  content: string | null; // final accepted artifact text (post-revision), markdown
+  reason: string | null; // populated when status is blocked/error
+  started_at: string | null;
+  finished_at: string | null;
+  input_tokens: number | null; // summed across every task this step ran
+  output_tokens: number | null;
+  tasks: StepTask[]; // full creator/critic/approver/executor breakdown, in order
+  is_gate: boolean; // whether this step ran the Approver/Executor phase
 }
 
 export type RunStatus = "running" | "completed" | "failed";
