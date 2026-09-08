@@ -102,3 +102,35 @@ export function getNextStepDef(flowNo: string): FlowStepDef | undefined {
   if (idx === -1) return undefined;
   return flow[idx + 1];
 }
+
+export function getStepDef(flowNo: string): FlowStepDef | undefined {
+  return loadFlow().find((s) => s.flow_step === flowNo);
+}
+
+// The four business phases the user specifically called out as needing to be
+// evidence-led rather than artifact-led: discovery, validation, QA, PMF.
+const EVIDENCE_LED_PHASES = new Set([
+  "Problem Discovery",
+  "Market Validation",
+  "Quality",
+  "Product-Market Fit",
+]);
+
+export function isEvidenceLedPhase(businessPhase: string): boolean {
+  return EVIDENCE_LED_PHASES.has(businessPhase);
+}
+
+/**
+ * Extracts an explicit "Return to Step NN" / "Step NN" back-reference from a
+ * loop_reentry_condition string, when one exists (e.g. "Return to Step 29
+ * until critical concerns are resolved"). Most loop_reentry_condition text is
+ * non-numeric ("revise pricing/product/channel assumptions," "repeat
+ * interviews") - that's intentionally NOT treated as a return-to-step target
+ * here; it's handled as a same-step retry instead (see evaluateGate in
+ * orchestrator.ts). Returns the zero-padded flow_step string, or null.
+ */
+export function parseReturnToStep(loopCondition: string): string | null {
+  const match = loopCondition.match(/step\s*0*(\d{1,2})/i);
+  if (!match) return null;
+  return match[1].padStart(2, "0");
+}
