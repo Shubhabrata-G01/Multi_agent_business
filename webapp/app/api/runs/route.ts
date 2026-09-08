@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { startRun } from "@/lib/orchestrator";
+import { healIfStale, startRun } from "@/lib/orchestrator";
 import { listRuns } from "@/lib/runStore";
 import {
   isValidProvider,
@@ -8,17 +8,19 @@ import {
 } from "@/lib/providers";
 
 export async function GET() {
-  const runs = listRuns().map((r) => ({
-    id: r.id,
-    idea: r.idea,
-    status: r.status,
-    created_at: r.created_at,
-    updated_at: r.updated_at,
-    current_step_index: r.current_step_index,
-    total_steps: r.total_steps,
-    provider: r.provider,
-    model: r.model,
-  }));
+  const runs = listRuns()
+    .map((r) => healIfStale(r))
+    .map((r) => ({
+      id: r.id,
+      idea: r.idea,
+      status: r.status,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+      current_step_index: r.current_step_index,
+      total_steps: r.total_steps,
+      provider: r.provider,
+      model: r.model,
+    }));
   return NextResponse.json({ runs });
 }
 

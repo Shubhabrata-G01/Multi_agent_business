@@ -59,6 +59,94 @@ const SNIPPET_LENGTH = 220;
 // Bounded-loop parameters for the state machine (see evaluateGate below). Each
 // is independently bounded, and MAX_TOTAL_STEP_EXECUTIONS is a hard ceiling on
 // top of both so no combination of retries/jumps can hang a run.
+// Turns on Anthropic's server-side web_search tool (see providers/anthropic.ts)
+// for Creator calls on evidence-led phase steps (Problem Discovery/Market
+// Validation/Quality/Product-Market Fit - see isEvidenceLedPhase). This is
+// the one integration this app can wire up without a separate paid
+// account/credentials, since it rides the same Anthropic API key already
+// configured and Anthropic executes the search server-side. Without it,
+// those steps had no way to produce real evidence at all and would exhaust
+// their retry budget and hold indefinitely the moment a critic asked for
+// sourced findings instead of a hypothesis (see e.g. runs/*.json step 05,
+// UXR-001/PM-001). Default on; set ENABLE_WEB_SEARCH=false to disable, e.g.
+// if a given Anthropic key doesn't have web_search available.
+const ENABLE_WEB_SEARCH = (process.env.ENABLE_WEB_SEARCH ?? "true") !== "false";
+const WEB_SEARCH_MAX_USES = Number(process.env.WEB_SEARCH_MAX_USES || 5);
+const WEB_RESEARCH_INTEGRATION_NAME = "Web research (search + page fetch)";
+
+// How long a "running" run can go with zero observed task activity before
+// it's treated as orphaned rather than merely slow. This app has no worker
+// queue - executeRun is a fire-and-forget in-process async loop (see
+// startRun/resumeRun below) - so a dev-server hot reload, a process
+// restart, or a crashed request context can kill that loop mid-await with
+// nothing left to ever write an error or advance run.status. The result is
+// a run.json frozen at "running" forever: no step ever shows "error", so
+// the UI's per-step Restart button (which only renders for a blocked/error
+// step) never appears, and nothing ever looked like it "failed the
+// timeout" because the code that would have thrown wasn't running anymore
+// at all - it wasn't a slow call, it was no call. STALE_RUN_MS is set well
+// above one provider call's worst case (PROVIDER_TIMEOUT_MS, no longer
+// multiplied by retries now that a timeout itself is non-retryable - see
+// providers/anthropic.ts, gemini.ts, openaiCompatible.ts) plus a genuinely
+// transient error's retry/backoff, so a run that's merely working through a
+// slow step is never mistaken for a dead one.
+const STALE_RUN_MS = Number(process.env.STALE_RUN_MS || 10 * 60 * 1000);
+
+/** Most recent timestamp we actually observed progress on this run, across
+ * every task in every step (each task is timestamped the moment it starts
+ * and again when it finishes - see runTask) - a far tighter heartbeat than
+ * run.updated_at, which only moves at step boundaries and can legitimately
+ * sit unchanged for many minutes while a single step's Creator/Critic/
+ * Contributor/Approver/Executor chain is still genuinely working. */
+function lastActivityAt(run: RunState): number {
+  let latest = Date.parse(run.updated_at) || 0;
+  for (const step of run.steps) {
+    for (const task of step.tasks) {
+      const ts = Date.parse(task.finished_at ?? task.started_at ?? "");
+      if (!Number.isNaN(ts) && ts > latest) latest = ts;
+    }
+  }
+  return latest;
+}
+
+/**
+ * Call this on every read of a run that might be "running" (the polling GET
+ * route, the run list, and the top of resumeRun below) - if nothing has
+ * happened on it for STALE_RUN_MS, whatever in-process loop owned it is
+ * gone, so it's marked "failed" (with the in-flight step flipped to "error"
+ * so the UI's Restart button actually renders) rather than left to spin
+ * forever. This only changes status/reason fields - run.current_step_index,
+ * step_attempts, and jump_counts are untouched, so resumeRun picks the run
+ * back up from exactly the step it was frozen on, same as any other
+ * error-status resume.
+ */
+export function healIfStale(run: RunState): RunState {
+  if (run.status !== "running") return run;
+  const idleMs = Date.now() - lastActivityAt(run);
+  if (idleMs < STALE_RUN_MS) return run;
+
+  const idleMinutes = Math.round(idleMs / 60000);
+  const reason =
+    `No progress for over ${idleMinutes} minute(s) - this run was likely ` +
+    `interrupted (e.g. a server restart or reload) rather than still ` +
+    `genuinely working. Safe to restart from exactly where it left off.`;
+
+  const stuckStep =
+    run.steps.find((s) => s.status === "running") ?? run.steps[run.current_step_index];
+  if (stuckStep) {
+    stuckStep.status = "error";
+    stuckStep.reason = reason;
+    stuckStep.finished_at = new Date().toISOString();
+  }
+  run.status = "failed";
+  run.error = stuckStep
+    ? `Step ${stuckStep.flow_step} (${stuckStep.activity}): ${reason}`
+    : reason;
+  run.updated_at = new Date().toISOString();
+  saveRun(run);
+  return run;
+}
+
 const MAX_RETRIES_PER_STEP = Number(process.env.MAX_RETRIES_PER_STEP || 2);
 const MAX_JUMPS_PER_TARGET = Number(process.env.MAX_JUMPS_PER_TARGET || 1);
 const MAX_TOTAL_STEP_EXECUTIONS = Number(process.env.MAX_TOTAL_STEP_EXECUTIONS || 200);
@@ -117,7 +205,21 @@ const STEP_CONTRIBUTORS: Record<string, ContributorSpec[]> = {
   ],
 };
 
-function runtimeNotice(provider: LLMProvider, roleInstructions: string): string {
+/**
+ * Anthropic-only, and only for Creator calls on evidence-led phase steps
+ * (see the ENABLE_WEB_SEARCH comment above) - Critics/Approvers/Executors/
+ * Contributors and every other provider never get this, so their system
+ * prompt correctly still says NOT CONNECTED.
+ */
+function webSearchEnabledFor(provider: LLMProvider, step: FlowStepDef): boolean {
+  return provider === "anthropic" && ENABLE_WEB_SEARCH && isEvidenceLedPhase(step.business_phase);
+}
+
+function runtimeNotice(
+  provider: LLMProvider,
+  roleInstructions: string,
+  connectedThisCall: string[] = [],
+): string {
   return `---
 
 ## Runtime notice (read this)
@@ -136,20 +238,39 @@ yourself, state it as a clear DECISION with your reasoning and confidence,
 and move the business forward. Note any real-world risk of that autonomy in
 your output rather than silently absorbing it.
 
-${renderIntegrationNotice()}
+${renderIntegrationNotice(connectedThisCall)}
 
 ${roleInstructions}`;
 }
 
-function buildSystemPrompt(agentSpecText: string, provider: LLMProvider): string {
+function buildSystemPrompt(
+  agentSpecText: string,
+  provider: LLMProvider,
+  connectedThisCall: string[] = [],
+): string {
+  const webSearchGuidance = connectedThisCall.includes(WEB_RESEARCH_INTEGRATION_NAME)
+    ? `
+
+Live web search is CONNECTED for this call - use it before writing findings
+that a search could actually inform (competitor pricing/sites, forum and
+review-site complaints, published market/industry reports, existing
+translation-adjacent tools, etc.). This still is NOT primary research (no
+tool here can recruit or interview real target users - that gap is real and
+should still be named as an ASSUMPTION/Required Integration where it matters),
+but real, cited secondary evidence is materially stronger than an
+unsourced hypothesis and should be preferred wherever it's available. Put
+the actual URL you found in a claim's "source" field - never invent one.`
+    : "";
+
   return `${agentSpecText}
 
 ${runtimeNotice(
   provider,
   `Respond with the requested artifact, in full, as Markdown - no preamble, no
-"Here is the artifact" framing.
+"Here is the artifact" framing.${webSearchGuidance}
 
 ${ARTIFACT_META_INSTRUCTIONS}`,
+  connectedThisCall,
 )}`;
 }
 
@@ -521,6 +642,7 @@ async function runTask(
   model: string,
   apiKey: string,
   labelConfig: RunTaskLabel,
+  webSearch?: boolean,
 ): Promise<StepTask> {
   const task = newTask(role, agent, model);
   run.steps[stepIndex].tasks.push(task);
@@ -533,6 +655,8 @@ async function runTask(
       systemPrompt,
       userMessage,
       maxTokens,
+      enableWebSearch: webSearch,
+      maxWebSearches: webSearch ? WEB_SEARCH_MAX_USES : undefined,
     });
 
     task.input_tokens = result.inputTokens;
@@ -573,6 +697,57 @@ async function runTask(
 
   saveRun(run);
   return task;
+}
+
+/**
+ * The one shared "send it back to the Creator" mechanic, used after every
+ * downstream role that can flag a problem with the Creator's artifact -
+ * Critic (changes_requested), Contributor (self-reported blocked), Approver
+ * (rejected), Executor (self-reported blocked). Whichever role raised it, the
+ * fix is the same: re-execute ONLY the Creator, with ONLY that role's
+ * specific findings (buildRevisionUserMessage's "one revision pass,
+ * incorporate what's correct"), not a full re-run of the step or of the
+ * roles that already passed. A no-findings call is a no-op so every call
+ * site can call this unconditionally instead of guarding it separately.
+ */
+async function reviseWithFindings(
+  run: RunState,
+  stepIndex: number,
+  creatorAgent: RegistryAgent,
+  creatorSystem: string,
+  stepDef: FlowStepDef,
+  content: string,
+  meta: ArtifactMeta,
+  findings: Finding[],
+  provider: LLMProvider,
+  model: string,
+  apiKey: string,
+  webSearch: boolean,
+): Promise<{ content: string; meta: ArtifactMeta }> {
+  if (findings.length === 0) {
+    return { content, meta };
+  }
+  const revisionTask = await runTask(
+    run,
+    stepIndex,
+    "creator",
+    creatorAgent,
+    creatorSystem,
+    buildRevisionUserMessage(stepDef, content, findings),
+    MAX_TOKENS,
+    provider,
+    model,
+    apiKey,
+    { label: "ARTIFACT_META" },
+    webSearch,
+  );
+  if (revisionTask.status === "done" && revisionTask.content) {
+    return { content: revisionTask.content, meta: revisionTask.meta ?? meta };
+  }
+  // A blocked/failed revision falls back to the pre-revision artifact rather
+  // than aborting the run - one round not landing shouldn't take down a
+  // whole run; evaluateGate below still sees the unresolved verdicts either way.
+  return { content, meta };
 }
 
 function sumRunTokens(run: RunState): number {
@@ -790,8 +965,13 @@ async function executeRun(
         MAX_CRITICS_PER_STEP,
       );
       const gate = stepResult.is_gate;
+      const webSearch = webSearchEnabledFor(provider, stepDef);
       const creatorSpec = getAgentSpecText(creatorAgent.id);
-      const creatorSystem = buildSystemPrompt(creatorSpec, provider);
+      const creatorSystem = buildSystemPrompt(
+        creatorSpec,
+        provider,
+        webSearch ? [WEB_RESEARCH_INTEGRATION_NAME] : [],
+      );
 
       // 1. CREATOR
       const priorPathEntry = [...run.path].reverse().find(
@@ -821,6 +1001,7 @@ async function executeRun(
         model,
         apiKey,
         { label: "ARTIFACT_META" },
+        webSearch,
       );
 
       if (creatorTask.status === "blocked") {
@@ -864,35 +1045,26 @@ async function executeRun(
         );
 
         const requestedChanges = criticTasks.filter((t) => t.verdict === "changes_requested");
-        if (requestedChanges.length > 0) {
-          const findings: Finding[] = requestedChanges.map((t) => ({
-            agent_name: t.agent_name,
-            role: t.role,
-            content: t.content,
-            reason: t.reason,
-          }));
-          const revisionTask = await runTask(
-            run,
-            pc,
-            "creator",
-            creatorAgent,
-            creatorSystem,
-            buildRevisionUserMessage(stepDef, workingContent, findings),
-            MAX_TOKENS,
-            provider,
-            model,
-            apiKey,
-            { label: "ARTIFACT_META" },
-          );
-          if (revisionTask.status === "done" && revisionTask.content) {
-            workingContent = revisionTask.content;
-            creatorMeta = revisionTask.meta ?? creatorMeta;
-          }
-          // A blocked/failed revision falls back to the pre-revision
-          // artifact rather than aborting the run - one review round not
-          // landing shouldn't take down a whole run; evaluateGate below
-          // still sees the unresolved critic verdicts either way.
-        }
+        const criticFindings: Finding[] = requestedChanges.map((t) => ({
+          agent_name: t.agent_name,
+          role: t.role,
+          content: t.content,
+          reason: t.reason,
+        }));
+        ({ content: workingContent, meta: creatorMeta } = await reviseWithFindings(
+          run,
+          pc,
+          creatorAgent,
+          creatorSystem,
+          stepDef,
+          workingContent,
+          creatorMeta,
+          criticFindings,
+          provider,
+          model,
+          apiKey,
+          webSearch,
+        ));
       }
 
       // 2b. CONTRIBUTORS (parallel) - specialist agents that author their own
@@ -928,6 +1100,32 @@ async function executeRun(
             workingContent += `\n\n---\n\n## ${contributors[idx].label} (contributed by ${task.agent_name})\n\n${task.content}`;
           }
         });
+
+        // A Contributor that self-reports blocked (e.g. it needs something
+        // from the primary artifact that isn't there) is itself a finding
+        // against the Creator's artifact, not just a dropped sub-section -
+        // feed it back the same way a Critic's changes_requested would be.
+        const blockedContributors = contributorTasks.filter((t) => t.status === "blocked");
+        const contributorFindings: Finding[] = blockedContributors.map((t) => ({
+          agent_name: t.agent_name,
+          role: t.role,
+          content: t.content,
+          reason: t.reason,
+        }));
+        ({ content: workingContent, meta: creatorMeta } = await reviseWithFindings(
+          run,
+          pc,
+          creatorAgent,
+          creatorSystem,
+          stepDef,
+          workingContent,
+          creatorMeta,
+          contributorFindings,
+          provider,
+          model,
+          apiKey,
+          webSearch,
+        ));
       }
 
       // 3. APPROVER (gate steps only, when the creator has a resolvable manager)
@@ -956,30 +1154,27 @@ async function executeRun(
           );
 
           if (approverTask.verdict === "rejected") {
-            const revisionTask = await runTask(
+            ({ content: workingContent, meta: creatorMeta } = await reviseWithFindings(
               run,
               pc,
-              "creator",
               creatorAgent,
               creatorSystem,
-              buildRevisionUserMessage(stepDef, workingContent, [
+              stepDef,
+              workingContent,
+              creatorMeta,
+              [
                 {
                   agent_name: approverTask.agent_name,
                   role: "approver",
                   content: approverTask.content,
                   reason: approverTask.reason,
                 },
-              ]),
-              MAX_TOKENS,
+              ],
               provider,
               model,
               apiKey,
-              { label: "ARTIFACT_META" },
-            );
-            if (revisionTask.status === "done" && revisionTask.content) {
-              workingContent = revisionTask.content;
-              creatorMeta = revisionTask.meta ?? creatorMeta;
-            }
+              webSearch,
+            ));
           }
         }
 
@@ -988,7 +1183,7 @@ async function executeRun(
         if (nextStepDef) {
           const executorAgent = getPrimaryAgentsForStep(nextStepDef.flow_step)[0];
           if (executorAgent) {
-            await runTask(
+            const executorTask = await runTask(
               run,
               pc,
               "executor",
@@ -1001,8 +1196,33 @@ async function executeRun(
               apiKey,
               { label: "STATUS", values: ["OK", "BLOCKED"] },
             );
-            // Non-fatal either way: the Execution Directive supplements the
-            // step's artifact, it doesn't replace it.
+            // The Execution Directive supplements the step's artifact, it
+            // doesn't replace it - but an Executor that reports itself
+            // BLOCKED is still a finding against what it was handed, so it
+            // gets the same one-shot Creator revision as every other role.
+            if (executorTask.status === "blocked") {
+              ({ content: workingContent, meta: creatorMeta } = await reviseWithFindings(
+                run,
+                pc,
+                creatorAgent,
+                creatorSystem,
+                stepDef,
+                workingContent,
+                creatorMeta,
+                [
+                  {
+                    agent_name: executorTask.agent_name,
+                    role: executorTask.role,
+                    content: executorTask.content,
+                    reason: executorTask.reason,
+                  },
+                ],
+                provider,
+                model,
+                apiKey,
+                webSearch,
+              ));
+            }
           }
         }
       }
@@ -1160,10 +1380,15 @@ export function startRun(
  * the UI to ask for one) if neither is available.
  */
 export function resumeRun(id: string, suppliedApiKey: string | undefined): void {
-  const run = loadRun(id);
+  let run = loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
+  // A caller can hit this route directly without ever having polled GET
+  // /api/runs/[id] first (that route's own healIfStale call is what usually
+  // catches this) - so check here too, otherwise a genuinely orphaned
+  // "running" run would just throw "cannot be resumed" forever.
+  run = healIfStale(run);
   if (run.status !== "held" && run.status !== "failed") {
     throw new Error(`Run cannot be resumed (current status: ${run.status})`);
   }

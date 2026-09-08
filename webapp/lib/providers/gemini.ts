@@ -30,9 +30,15 @@ export async function callGemini(
       signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
   } catch (err) {
+    // AbortSignal.timeout() rejects with a DOMException named "TimeoutError" -
+    // that's our own PROVIDER_TIMEOUT_MS budget already spent, not a blip, so
+    // it isn't retryable (retrying would just hang for another full
+    // PROVIDER_TIMEOUT_MS per attempt instead of failing promptly). Any other
+    // network error (DNS, connection reset, etc.) is still worth retrying.
+    const isTimeout = err instanceof Error && err.name === "TimeoutError";
     throw new ProviderCallError(
-      `Network error calling Gemini: ${err instanceof Error ? err.message : String(err)}`,
-      true,
+      `${isTimeout ? "Timed out" : "Network error"} calling Gemini: ${err instanceof Error ? err.message : String(err)}`,
+      !isTimeout,
     );
   }
 

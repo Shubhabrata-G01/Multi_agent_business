@@ -13,6 +13,11 @@ export interface ProviderCallParams {
   systemPrompt: string;
   userMessage: string;
   maxTokens: number;
+  // Anthropic-only: turns on the provider's server-side web_search tool for
+  // this call (see anthropic.ts). Ignored by every other provider's runner -
+  // they don't read this field, so passing it is a harmless no-op there.
+  enableWebSearch?: boolean;
+  maxWebSearches?: number;
 }
 
 export interface ProviderCallResult {

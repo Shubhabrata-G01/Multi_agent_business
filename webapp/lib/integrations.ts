@@ -1,12 +1,15 @@
 // Mirrors the "what is actually connected" section of
-// company/architecture/07-mcp-tool-integration-policy.md. Every entry is
-// marked connected: false for THIS app's runtime specifically - the
-// creator/critic/approver/executor/contributor calls in orchestrator.ts are
-// plain text-completion API calls with no function-calling wired up, so
-// regardless of what other tools exist in the broader environment, none of
-// them are reachable from inside a run. This file exists so that fact is
-// stated once, structurally, and surfaced to every agent explicitly instead
-// of a single blanket "you have no tools" sentence.
+// company/architecture/07-mcp-tool-integration-policy.md. `connected: false`
+// here means "not wired up as a standing capability of this app" - it's the
+// static baseline. One entry (Web research) can be upgraded to genuinely live
+// for a single call: orchestrator.ts turns on Anthropic's server-side
+// web_search tool for Creator calls on evidence-led phases (see
+// webSearchEnabledFor in orchestrator.ts) and passes its name into
+// renderIntegrationNotice() below so that call's system prompt reflects the
+// truth instead of a blanket "you have no tools" sentence. Every other entry
+// stays false because it would need its own account/credentials (a CRM, a
+// paid research panel, Google Workspace, etc.) that nothing in this repo
+// currently holds.
 export interface IntegrationStatus {
   name: string;
   connected: boolean;
@@ -26,6 +29,13 @@ export const INTEGRATION_REGISTRY: IntegrationStatus[] = [
     connected: false,
     capability: "reading sites with no API (pricing pages, app stores, review sites)",
     used_by: "Design, Sales, Marketing",
+  },
+  {
+    name: "User research panel / participant recruiting",
+    connected: false,
+    capability:
+      "recruiting, scheduling, and conducting real primary interviews or surveys with actual target users",
+    used_by: "UX Research, Product",
   },
   {
     name: "Google Workspace (Gmail/Calendar/Drive)",
@@ -90,23 +100,41 @@ export const INTEGRATION_REGISTRY: IntegrationStatus[] = [
  * 07-mcp-tool-integration-policy.md that an agent should use instead of
  * asserting a capability it doesn't have.
  */
-export function renderIntegrationNotice(): string {
-  const lines = INTEGRATION_REGISTRY.map(
-    (i) => `- ${i.name}: NOT CONNECTED in this run (would provide: ${i.capability})`,
+/**
+ * @param connectedThisCall - names (must match INTEGRATION_REGISTRY entries)
+ * that are genuinely live for this specific call, e.g. ["Web research (search
+ * + page fetch)"] when orchestrator.ts turned on Anthropic's web_search tool
+ * for this Creator call. Everything else still renders as NOT CONNECTED.
+ */
+export function renderIntegrationNotice(connectedThisCall: string[] = []): string {
+  const connectedSet = new Set(connectedThisCall);
+  const lines = INTEGRATION_REGISTRY.map((i) =>
+    connectedSet.has(i.name)
+      ? `- ${i.name}: CONNECTED for this call (provides: ${i.capability}) - you may actually use it.`
+      : `- ${i.name}: NOT CONNECTED in this run (would provide: ${i.capability})`,
   ).join("\n");
 
-  return `You have NO filesystem access and NO live tool/API calls of any kind in this
-run - every integration below is unavailable, regardless of what your spec
-above says is normally connected:
+  const usageNote = connectedSet.size
+    ? `\nFor any tool marked CONNECTED above: actually invoke it before relying on
+what it would tell you - then cite the real URL/source it returned in that
+claim's "source" field. A CONNECTED tool you don't use gives no credit; a
+claim that reads like it came from one but names no real source is still an
+unsourced claim.\n`
+    : "";
+
+  return `You have NO filesystem access in this run. Your live tool/API access is
+exactly what is marked CONNECTED below - every other integration is
+unavailable this call, regardless of what your spec above says is normally
+connected:
 
 ${lines}
-
-Do not claim you searched, browsed, queried a CRM, or called any tool - you
-did not, and did not have the means to. Where your task would normally use
-one of these, either state the resulting gap as an ASSUMPTION or ESTIMATE in
-your artifact-meta claims (never as a FACT), or, if the missing capability is
-significant enough to call out structurally, include this block in your
-artifact body:
+${usageNote}
+Do not claim you searched, browsed, queried a CRM, or called any tool that is
+NOT marked CONNECTED above - you did not, and did not have the means to.
+Where your task would normally use one of the NOT CONNECTED tools, either
+state the resulting gap as an ASSUMPTION or ESTIMATE in your artifact-meta
+claims (never as a FACT), or, if the missing capability is significant enough
+to call out structurally, include this block in your artifact body:
 
 Required Integration:
 Tool: <name>
