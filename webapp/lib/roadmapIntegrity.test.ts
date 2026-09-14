@@ -58,6 +58,13 @@ describe("validateRoadmapIntegrity on the real software-saas-v1 roadmap", () => 
     expect(detail).not.toContain("Finance");
     expect(detail).not.toContain("Design / UX");
   });
+
+  it("flags Operations (and only Operations among operational teams) as owning no primary node", () => {
+    const floor = findings.filter((f) => f.check === "operational-ownership-floor");
+    expect(floor).toHaveLength(1);
+    expect(floor[0].severity).toBe("warning");
+    expect(floor[0].detail).toContain("Operations");
+  });
 });
 
 describe("validateRoadmapIntegrity structural checks", () => {

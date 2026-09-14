@@ -8,14 +8,15 @@ import {
 import { recordGateDecision, saveArtifactVersion } from "./artifactStore";
 import { validateClaimSources } from "./claimSourceValidator";
 import { checkArtifactMedium } from "./mediumValidator";
+import { composeRoadmap } from "./packs";
 import { roadmapIntegrityErrors } from "./roadmapIntegrity";
+import { reviewersForNode } from "./router";
 import {
   getAgentById,
   getAgentSpecText,
   getFlowSteps,
   getNextStepDef,
   getPrimaryAgentsForStep,
-  getSupportingAgentsForStep,
   isEvidenceLedPhase,
   isGateStep,
   parseReturnToStep,
@@ -1135,10 +1136,10 @@ async function executeRun(
       if (!creatorAgent) {
         throw new Error(`Unknown creator agent id: ${stepResult.agent_id}`);
       }
-      const criticAgents = getSupportingAgentsForStep(stepDef.flow_step).slice(
-        0,
-        MAX_CRITICS_PER_STEP,
-      );
+      // Reviewers come from the node's own reviewer_capabilities via the router,
+      // so pack-injected nodes (not in the registry's flow_supporting_steps map)
+      // still get their critics; legacy/base nodes fall back to that map.
+      const criticAgents = reviewersForNode(stepDef, MAX_CRITICS_PER_STEP);
       const gate = stepResult.is_gate;
       const mode = runMode(run);
 
@@ -1603,10 +1604,11 @@ export function startRun(
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
   const id = crypto.randomUUID();
-  // Phase 0b: every new run gets an explicit roadmap. Today that's always the
-  // software-saas-v1 template (the adapted 81-step flow); Phase 0c will generate
-  // a per-idea roadmap and pass it here instead.
-  const roadmap = buildSoftwareSaasV1Roadmap();
+  // Every new run gets an explicit roadmap: the software-saas-v1 base template
+  // (0b), composed with any capability packs the profile's risk flags activate
+  // (1a). With no profile or no risk flags this is exactly the base template.
+  const base = buildSoftwareSaasV1Roadmap();
+  const roadmap = composeRoadmap(base, profile);
 
   // §7.2 compose-time guard: never start a run on a structurally broken roadmap
   // (a node with no owner, a dangling dependency, a self-reviewing primary, an

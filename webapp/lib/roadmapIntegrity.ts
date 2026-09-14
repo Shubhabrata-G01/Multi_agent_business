@@ -105,7 +105,36 @@ export function validateRoadmapIntegrity(roadmap: Roadmap): RoadmapIntegrityFind
   // domain has no single accountable integrator (the Legal/Security GC↔SEC gap).
   findings.push(...namedIntegratorFindings(roadmap));
 
+  // 6. Operational-sector ownership floor (§7.2). Finance, People, Operations and
+  // Sales must each hold PRIMARY ownership of at least one node, not appear only
+  // as reviewers. On the base software-saas-v1 roadmap this flags exactly
+  // Operations (its "clearest weak sector" finding).
+  findings.push(...operationalFloorFindings(roadmap));
+
   return findings;
+}
+
+const OPERATIONAL_TEAMS = ["Finance", "People / HR", "Operations", "Sales / Revenue"];
+
+function operationalFloorFindings(roadmap: Roadmap): RoadmapIntegrityFinding[] {
+  const agentsById = new Map(getAllAgents().map((a) => [a.id, a]));
+  const primaryTeams = new Set<string>();
+  for (const node of roadmap.nodes) {
+    const primaryId = node.required_capabilities[0];
+    const team = primaryId ? agentsById.get(primaryId)?.team : undefined;
+    if (team) primaryTeams.add(team);
+  }
+  const out: RoadmapIntegrityFinding[] = [];
+  for (const team of OPERATIONAL_TEAMS) {
+    if (!primaryTeams.has(team)) {
+      out.push({
+        check: "operational-ownership-floor",
+        severity: "warning",
+        detail: `Operational domain "${team}" owns no primary node in this roadmap - it appears only as a supporting/reviewing actor. Give it primary ownership of at least the operational work it should own.`,
+      });
+    }
+  }
+  return out;
 }
 
 function namedIntegratorFindings(roadmap: Roadmap): RoadmapIntegrityFinding[] {

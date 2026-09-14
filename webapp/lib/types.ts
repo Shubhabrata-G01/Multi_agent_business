@@ -220,6 +220,10 @@ export interface Roadmap {
   template_id: string;
   packs: string[];
   nodes: WorkflowNode[];
+  // Set when this roadmap was composed for a specific idea (base template +
+  // capability packs activated from the profile's risk flags); unset for a bare
+  // template loaded as-is. See §3.4/§3.5.
+  generated_from?: BusinessProfile;
 }
 
 // What a run is parameterized by, beyond provider/model/key. See §3.2.
