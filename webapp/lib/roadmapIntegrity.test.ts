@@ -65,6 +65,11 @@ describe("validateRoadmapIntegrity on the real software-saas-v1 roadmap", () => 
     expect(floor[0].severity).toBe("warning");
     expect(floor[0].detail).toContain("Operations");
   });
+
+  it("has no distinct-capability-KPI findings (every owner has its own declared metric)", () => {
+    const kpi = findings.filter((f) => f.check === "distinct-capability-kpi");
+    expect(kpi).toEqual([]);
+  });
 });
 
 describe("validateRoadmapIntegrity structural checks", () => {

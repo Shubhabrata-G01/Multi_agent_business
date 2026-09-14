@@ -34,6 +34,12 @@ describe("activatedPackIds", () => {
     expect(activatedPackIds(profile([]))).toEqual([]);
   });
 
+  it("activates physical-product from a physical-safety kind", () => {
+    expect(activatedPackIds(profile([{ kind: "physical-safety", detail: "", suggested_pack: "" }]))).toEqual([
+      "physical-product",
+    ]);
+  });
+
   it("dedupes and ignores unknown packs", () => {
     expect(
       activatedPackIds(

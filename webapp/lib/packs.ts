@@ -103,6 +103,40 @@ export const PACKS: CapabilityPack[] = [
     ],
   },
   {
+    id: "physical-product",
+    title: "Physical product / commerce",
+    anchor_phase: "Business Model",
+    nodes: [
+      {
+        slug: "sourcing",
+        business_phase: "Supply Chain",
+        activity: "Plan sourcing, bill of materials, and suppliers",
+        primary: "BOM-001",
+        reviewers: ["CFO-001", "GC-001"],
+        output_artifact: "Sourcing & Supplier Plan",
+        what_the_role_does:
+          "Define the bill of materials, supplier options, lead times, MOQs, and landed-cost model.",
+        done_gate_criteria: "A BOM, qualified suppliers, and a landed-cost model exist.",
+        inputs: "Product definition, unit economics",
+        evidence_led: true,
+        risk_level: 1,
+      },
+      {
+        slug: "fulfillment",
+        business_phase: "Supply Chain",
+        activity: "Plan manufacturing, fulfillment, and logistics",
+        primary: "BOM-001",
+        reviewers: ["CFO-001", "QA-001"],
+        output_artifact: "Manufacturing & Fulfillment Plan",
+        what_the_role_does:
+          "Specify manufacturing, QA acceptance, warehousing, fulfillment, returns, and logistics.",
+        done_gate_criteria: "A production-to-delivery flow with QA gates and returns handling exists.",
+        inputs: "Sourcing plan",
+        risk_level: 1,
+      },
+    ],
+  },
+  {
     id: "marketplace",
     title: "Two-sided marketplace",
     anchor_phase: "Business Model",
@@ -145,6 +179,7 @@ const KIND_TO_PACK: Record<string, string> = {
   payments: "fintech",
   "financial-custody": "fintech",
   "health-data": "regulated-health",
+  "physical-safety": "physical-product",
 };
 
 /** Pack ids a profile activates, from its risk flags (suggested_pack match, or a

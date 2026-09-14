@@ -7,8 +7,10 @@ import {
 } from "./artifactMeta";
 import { recordGateDecision, saveArtifactVersion } from "./artifactStore";
 import { validateClaimSources } from "./claimSourceValidator";
+import { extractEvidence } from "./evidence";
+import { enqueueRun } from "./jobQueue";
 import { checkArtifactMedium } from "./mediumValidator";
-import { composeRoadmap } from "./packs";
+import { buildRoadmapForProfile } from "./roadmap";
 import { roadmapIntegrityErrors } from "./roadmapIntegrity";
 import { reviewersForNode } from "./router";
 import {
@@ -25,7 +27,6 @@ import { renderIntegrationNotice } from "./integrations";
 import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
-import { buildSoftwareSaasV1Roadmap } from "./templates/softwareSaasV1";
 import type {
   ApprovalRequest,
   ArtifactMeta,
@@ -1441,6 +1442,18 @@ async function executeRun(
         };
       }
 
+      // Promote this step's cited claims (post-validation) into the run-level
+      // evidence ledger (Phase 1d) so the run carries a queryable citation trail.
+      const stepEvidence = extractEvidence(creatorMeta, {
+        run_id: id,
+        node_id: (stepDef as WorkflowNode).id ?? stepDef.flow_step,
+        flow_step: stepDef.flow_step,
+        at: new Date().toISOString(),
+      });
+      if (stepEvidence.length > 0) {
+        run.evidence = [...(run.evidence ?? []), ...stepEvidence];
+      }
+
       stepResult.content = workingContent;
       stepResult.meta = creatorMeta;
       stepResult.input_tokens = stepResult.tasks.reduce(
@@ -1604,11 +1617,10 @@ export function startRun(
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
   const id = crypto.randomUUID();
-  // Every new run gets an explicit roadmap: the software-saas-v1 base template
-  // (0b), composed with any capability packs the profile's risk flags activate
-  // (1a). With no profile or no risk flags this is exactly the base template.
-  const base = buildSoftwareSaasV1Roadmap();
-  const roadmap = composeRoadmap(base, profile);
+  // Every new run gets an explicit roadmap: the base template selected from the
+  // profile (software-saas-v1 or services-v1), composed with any capability packs
+  // the profile's risk flags activate. With no profile this is software-saas-v1.
+  const roadmap = buildRoadmapForProfile(profile);
 
   // §7.2 compose-time guard: never start a run on a structurally broken roadmap
   // (a node with no owner, a dangling dependency, a self-reviewing primary, an
@@ -1630,17 +1642,19 @@ export function startRun(
     cacheApiKey(id, apiKey);
   }
 
-  executeRun(id, provider, model, apiKey).catch((err) => {
-    const run2 = loadRun(id);
-    if (run2) {
-      run2.status = "failed";
-      run2.error =
-        "Unexpected orchestrator error: " +
-        (err instanceof Error ? err.message : String(err));
-      run2.updated_at = new Date().toISOString();
-      saveRun(run2);
-    }
-  });
+  enqueueRun(id, () =>
+    executeRun(id, provider, model, apiKey).catch((err) => {
+      const run2 = loadRun(id);
+      if (run2) {
+        run2.status = "failed";
+        run2.error =
+          "Unexpected orchestrator error: " +
+          (err instanceof Error ? err.message : String(err));
+        run2.updated_at = new Date().toISOString();
+        saveRun(run2);
+      }
+    }),
+  );
 
   return id;
 }
@@ -1690,17 +1704,19 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
   run.updated_at = new Date().toISOString();
   saveRun(run);
 
-  executeRun(id, run.provider, run.model, apiKey).catch((err) => {
-    const run2 = loadRun(id);
-    if (run2) {
-      run2.status = "failed";
-      run2.error =
-        "Unexpected orchestrator error: " +
-        (err instanceof Error ? err.message : String(err));
-      run2.updated_at = new Date().toISOString();
-      saveRun(run2);
-    }
-  });
+  enqueueRun(id, () =>
+    executeRun(id, run.provider, run.model, apiKey).catch((err) => {
+      const run2 = loadRun(id);
+      if (run2) {
+        run2.status = "failed";
+        run2.error =
+          "Unexpected orchestrator error: " +
+          (err instanceof Error ? err.message : String(err));
+        run2.updated_at = new Date().toISOString();
+        saveRun(run2);
+      }
+    }),
+  );
 }
 
 /**

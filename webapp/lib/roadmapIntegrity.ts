@@ -1,4 +1,5 @@
 import { getAgentById, getAllAgents } from "./businessFlow";
+import { capabilityKpi } from "./capabilityKpis";
 import type { Roadmap } from "./types";
 
 // Compose-time roadmap-integrity checks - company/architecture/
@@ -12,11 +13,11 @@ import type { Roadmap } from "./types";
 //  - known capabilities: every id resolves to a real registry agent
 //  - graph refs: depends_on / loop_reentry_target point at real nodes/steps
 //  - named integrator per domain (team)    (the Legal/Security GC↔SEC gap)
+//  - operational-sector ownership floor     (Operations owns no primary node)
+//  - distinct capability success metric      (the CFO/FPA, CPO/PA, COO/BOM class)
 //
-// Deferred to Phase 1a (need capability-level KPI/domain metadata the current
-// model doesn't carry): "distinct capability success metric" and
-// "operational-sector ownership floor". They are stubbed as no-ops with a note
-// rather than faked, so this module never reports a check it can't actually run.
+// All four §7.2 structural checks are now implemented (the last two arrived with
+// the capability packs + capabilityKpis.ts in Phase 1a/1b).
 
 export type IntegritySeverity = "error" | "warning";
 
@@ -111,7 +112,45 @@ export function validateRoadmapIntegrity(roadmap: Roadmap): RoadmapIntegrityFind
   // Operations (its "clearest weak sector" finding).
   findings.push(...operationalFloorFindings(roadmap));
 
+  // 7. Distinct capability success metric (§7.2). Every capability that owns a
+  // node must declare a KPI (capabilityKpis.ts), and no two owners may share one
+  // - the mechanical form of the P1 KPI-redundancy fixes (CFO/FPA, CPO/PA,
+  // COO/BOM). Catches a future owning capability with no metric or a duplicate.
+  findings.push(...distinctKpiFindings(roadmap));
+
   return findings;
+}
+
+function distinctKpiFindings(roadmap: Roadmap): RoadmapIntegrityFinding[] {
+  const out: RoadmapIntegrityFinding[] = [];
+  const owners = new Set<string>();
+  for (const node of roadmap.nodes) {
+    const primary = node.required_capabilities[0];
+    if (primary) owners.add(primary);
+  }
+  const kpiToOwners = new Map<string, string[]>();
+  for (const owner of owners) {
+    const kpi = capabilityKpi(owner);
+    if (!kpi) {
+      out.push({
+        check: "distinct-capability-kpi",
+        severity: "warning",
+        detail: `Capability ${owner} owns node(s) but declares no success metric (capabilityKpis.ts) - it cannot be held to a distinct, non-inherited KPI.`,
+      });
+      continue;
+    }
+    kpiToOwners.set(kpi, [...(kpiToOwners.get(kpi) ?? []), owner]);
+  }
+  for (const [kpi, sharers] of kpiToOwners) {
+    if (sharers.length > 1) {
+      out.push({
+        check: "distinct-capability-kpi",
+        severity: "warning",
+        detail: `Capabilities [${sharers.join(", ")}] share the same success metric "${kpi}" - each node-owning capability must have its own, so you're paying for several that measure the same thing.`,
+      });
+    }
+  }
+  return out;
 }
 
 const OPERATIONAL_TEAMS = ["Finance", "People / HR", "Operations", "Sales / Revenue"];
