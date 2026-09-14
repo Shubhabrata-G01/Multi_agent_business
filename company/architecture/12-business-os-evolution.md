@@ -319,7 +319,7 @@ green. No phase is merged without tests.**
 | **0c** | LLM intake → `BusinessProfile`; UI becomes describe → clarify → preview roadmap → approve. | Old "just run it" path preserved behind a flag until the new flow is trusted. |
 | **1a** | Router with capability matching + first non-SaaS template (services/agency — lowest risk). | Router in 0 is pass-through; 1a swaps internals with the same signature. |
 | **1b** | Capability packs (marketplace, physical product, then regulated: fintech, health). | Packs activate only on `RiskFlag`; a plain SaaS idea gets exactly `software-saas-v1`. |
-| **1c** | `ApprovalRequest` end to end + founder control panel resolve. | Reuses held/resume; Level 2+ in assisted mode holds instead of overriding. |
+| **1c** ✅ **APPLIED 2026-09-14** | `ApprovalRequest` type + `RunState.approvals`; in assisted mode a Level-2+ (gate) node that would advance instead raises a pending request and holds; `decideApproval` (approve → advance past the gate; reject → bump attempt + rework) resumes the run; `POST /api/runs/[id]/approvals` resolves one; the run page shows an Approve/Reject panel with a reason field and reuses the key modal. An idempotent re-hold guard + a `resumeRun` pending-approval guard keep a stray resume from duplicating or re-running the step. | Reuses held/resume; Level 2+ in assisted mode now HOLDS for a human instead of overriding. 8 tests on the pure gate predicate/lookups; `tsc` + `next build` green. Full hold→approve→resume cycle not exercised by a live run (billed API). |
 | **1d** | Evidence extraction + evaluation gates + regression suite. | Additive to `validateArtifactMeta`; gates only *tighten*, never loosen. |
 | **2a** | DB-backed run/profile/approval state. | `runStore`-style isolation; migration script from JSON. |
 | **2b** | Durable queue/worker replaces fire-and-forget loop. | Fixes the documented [orchestrator.ts:77](../../webapp/lib/orchestrator.ts) restart-kills-run risk. |
@@ -393,10 +393,11 @@ They only ever tighten a gate — never loosen one (§8 invariant).
    "artifact generation mistaken for operational completion" finding (ChatGPT #3).*
    12 tests, including the DES-001 usability case.
 
-3. **Policy validator.** In `assisted` mode, a node whose `risk_level` ≥ 2 cannot
-   self-advance regardless of creator/critic verdicts — it must produce an
-   `ApprovalRequest` and hold (§3.6). This makes the HITL policy an enforced
-   runtime check, not a prompt request.
+3. **Policy validator.** ✅ **APPLIED 2026-09-14** (Phase 1c). In `assisted` mode,
+   a node whose `risk_level` ≥ 2 (a gate) cannot self-advance regardless of
+   creator/critic verdicts — the orchestrator raises a pending `ApprovalRequest`
+   and holds (§3.6), and only `decideApproval` (approve/reject) moves it. This
+   makes the HITL policy an enforced runtime check, not just a prompt request.
 
 4. **Budget validator.** Extends today's run-wide token/execution ceilings with a
    per-node cost cap and the optional `RunConfig.budget.max_usd`, checked before

@@ -26,6 +26,7 @@ import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
 import { buildSoftwareSaasV1Roadmap } from "./templates/softwareSaasV1";
 import type {
+  ApprovalRequest,
   ArtifactMeta,
   ExecutionMode,
   FlowStepDef,
@@ -39,6 +40,7 @@ import type {
   StepTask,
   TaskRole,
   TaskVerdict,
+  WorkflowNode,
 } from "./types";
 
 // Runs created before the ExecutionMode field existed have no `mode` on disk;
@@ -49,6 +51,51 @@ function runMode(run: RunState): ExecutionMode {
   // config.mode is canonical when present (Phase 0b+); run.mode is the 0a
   // top-level mirror; a run with neither is a pre-0a legacy run (simulation).
   return run.config?.mode ?? run.mode ?? DEFAULT_LEGACY_MODE;
+}
+
+// --- Human-approval helpers (Phase 1c) -------------------------------------
+// Exported for unit testing of the assisted-mode gate.
+
+export function pendingApprovalFor(
+  approvals: ApprovalRequest[] | undefined,
+  flowStep: string,
+  attempt: number,
+): ApprovalRequest | undefined {
+  return (approvals ?? []).find(
+    (a) => a.flow_step === flowStep && a.attempt === attempt && a.status === "pending",
+  );
+}
+
+export function hasApproved(
+  approvals: ApprovalRequest[] | undefined,
+  flowStep: string,
+  attempt: number,
+): boolean {
+  return (approvals ?? []).some(
+    (a) => a.flow_step === flowStep && a.attempt === attempt && a.status === "approved",
+  );
+}
+
+/**
+ * In assisted mode a Level-2+ (gate) node must not proceed without a human
+ * approval for its current attempt's artifact. Returns true when the run must
+ * stop and wait for one.
+ */
+export function needsHumanApproval(
+  mode: ExecutionMode,
+  isGate: boolean,
+  approvals: ApprovalRequest[] | undefined,
+  flowStep: string,
+  attempt: number,
+): boolean {
+  if (mode !== "assisted" || !isGate) return false;
+  return !hasApproved(approvals, flowStep, attempt);
+}
+
+/** A run holding on a pending approval must be resolved via approve/reject, not
+ * the generic resume path. */
+export function hasPendingApproval(run: RunState): boolean {
+  return (run.approvals ?? []).some((a) => a.status === "pending");
 }
 
 const MAX_RUN_STEPS = Number(process.env.MAX_RUN_STEPS || 81);
@@ -1091,6 +1138,19 @@ async function executeRun(
       );
       const gate = stepResult.is_gate;
       const mode = runMode(run);
+
+      // Idempotent re-hold guard (Phase 1c): if this gate step already has a
+      // pending human-approval request for this exact attempt, do NOT re-run the
+      // (expensive) step - a stray generic resume just re-holds. The only way
+      // past is approve/reject via decideApproval, which advances the pc or bumps
+      // the attempt before resuming.
+      if (mode === "assisted" && gate && pendingApprovalFor(run.approvals, stepDef.flow_step, attemptNumber)) {
+        run.status = "held";
+        run.updated_at = new Date().toISOString();
+        saveRun(run);
+        return;
+      }
+
       const webSearch = webSearchEnabledFor(provider, stepDef);
       const creatorSpec = getAgentSpecText(creatorAgent.id);
       const creatorSystem = buildSystemPrompt(
@@ -1415,6 +1475,48 @@ async function executeRun(
         run.jump_counts,
         integrityViolations,
       );
+
+      // Assisted-mode human gate (Phase 1c): a Level-2+ (gate) step that would
+      // otherwise advance must first get explicit human approval. Raise a pending
+      // ApprovalRequest and hold; decideApproval() advances (approve) or bumps the
+      // attempt (reject) and resumes. Recorded as "held" so the UI shows the pause
+      // accurately rather than a phantom "advance".
+      if (
+        gateResult.action === "advance" &&
+        needsHumanApproval(mode, gate, run.approvals, stepDef.flow_step, attemptNumber)
+      ) {
+        const node = stepDef as WorkflowNode;
+        const level = node.risk_level ?? 2;
+        const approval: ApprovalRequest = {
+          id: crypto.randomUUID(),
+          run_id: id,
+          flow_step: stepDef.flow_step,
+          node_id: node.id ?? stepDef.flow_step,
+          attempt: attemptNumber,
+          level,
+          activity: stepDef.activity,
+          output_artifact: stepDef.output_artifact,
+          summary: `Assisted mode: step ${stepDef.flow_step} ("${stepDef.activity}") is a Level-${level} decision gate producing "${stepDef.output_artifact}" and needs human approval before the run proceeds.`,
+          status: "pending",
+          created_at: new Date().toISOString(),
+        };
+        run.approvals = [...(run.approvals ?? []), approval];
+        stepResult.gate_decision = "held";
+        stepResult.gate_reason = "Awaiting human approval (assisted mode).";
+        recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
+        run.path.push({
+          flow_step: stepDef.flow_step,
+          attempt: attemptNumber,
+          decision: "held",
+          reason: stepResult.gate_reason,
+          at: stepResult.finished_at,
+        });
+        run.status = "held";
+        run.updated_at = new Date().toISOString();
+        saveRun(run);
+        return;
+      }
+
       stepResult.gate_decision = gateResult.action;
       stepResult.gate_reason = gateResult.reason;
       recordGateDecision(id, stepDef.flow_step, attemptNumber, gateResult.action, gateResult.reason);
@@ -1563,6 +1665,13 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
   if (run.status !== "held" && run.status !== "failed") {
     throw new Error(`Run cannot be resumed (current status: ${run.status})`);
   }
+  // A run holding on a pending human approval must be resolved via approve/reject
+  // (decideApproval), not the generic resume - otherwise it would just re-hold.
+  if (hasPendingApproval(run)) {
+    throw new Error(
+      "Run is awaiting human approval - approve or reject the pending request instead of resuming.",
+    );
+  }
 
   const effectiveSuppliedKey = suppliedApiKey || getCachedApiKey(id) || undefined;
   const { apiKey, source } = resolveApiKey(run.provider, effectiveSuppliedKey);
@@ -1586,6 +1695,84 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
       saveRun(run2);
     }
   });
+}
+
+/**
+ * Resolves a pending human-approval request (Phase 1c) on an assisted-mode run
+ * that is holding at a Level-2+ gate. Approve advances past the gate (the
+ * approved artifact stands); reject reworks it as a fresh attempt (which will
+ * raise its own approval). Either way the run then resumes from exactly the
+ * right place. The API key is handled exactly like resumeRun (supplied ->
+ * cache -> env), and a missing key surfaces the same "No API key supplied"
+ * error so the UI can prompt.
+ */
+export function decideApproval(
+  id: string,
+  approvalId: string,
+  decision: "approve" | "reject",
+  reason: string | undefined,
+  suppliedApiKey: string | undefined,
+): void {
+  const run = loadRun(id);
+  if (!run) {
+    throw new Error("Run not found");
+  }
+  const approval = (run.approvals ?? []).find((a) => a.id === approvalId);
+  if (!approval) {
+    throw new Error("Approval request not found");
+  }
+  if (approval.status !== "pending") {
+    throw new Error(`Approval request already ${approval.status}`);
+  }
+
+  const now = new Date().toISOString();
+  approval.decided_by = "founder";
+  approval.decided_at = now;
+  approval.reason = reason;
+
+  const stepIndex = run.steps.findIndex((s) => s.flow_step === approval.flow_step);
+  const step = stepIndex >= 0 ? run.steps[stepIndex] : undefined;
+
+  if (decision === "approve") {
+    approval.status = "approved";
+    if (step) {
+      step.gate_decision = "advance";
+      step.gate_reason = `Approved by ${approval.decided_by}.`;
+    }
+    run.path.push({
+      flow_step: approval.flow_step,
+      attempt: approval.attempt,
+      decision: "advance",
+      reason: `Human approval granted${reason ? `: ${reason}` : ""}.`,
+      at: now,
+    });
+    // Advance past the gate so executeRun continues at the NEXT step rather than
+    // re-running (and re-approving) this one.
+    if (stepIndex >= 0) run.current_step_index = stepIndex + 1;
+  } else {
+    approval.status = "rejected";
+    if (step) {
+      step.gate_decision = "held";
+      step.gate_reason = `Rejected by ${approval.decided_by}${reason ? `: ${reason}` : ""}.`;
+    }
+    run.path.push({
+      flow_step: approval.flow_step,
+      attempt: approval.attempt,
+      decision: "held",
+      reason: `Human rejected the gate${reason ? `: ${reason}` : ""}; reworking as a fresh attempt.`,
+      at: now,
+    });
+    // Rework: bump the attempt and keep the pc at this gate so executeRun re-runs
+    // it as a fresh attempt, whose new artifact raises its own approval request.
+    run.step_attempts[approval.flow_step] = (run.step_attempts[approval.flow_step] ?? 0) + 1;
+    if (stepIndex >= 0) run.current_step_index = stepIndex;
+  }
+  run.updated_at = now;
+  saveRun(run);
+
+  // No pending approval remains for this step now, so the generic resume path is
+  // valid again and picks up from the (advanced or reset) program counter.
+  resumeRun(id, suppliedApiKey);
 }
 
 /**

@@ -209,6 +209,26 @@ export interface PathEntry {
   at: string;
 }
 
+// A human-approval gate raised in assisted mode when a Level-2+ (gate) node is
+// ready to proceed. The run holds until a human approves or rejects it. See
+// company/architecture/12-business-os-evolution.md §3.6 and 1c.
+export interface ApprovalRequest {
+  id: string;
+  run_id: string;
+  flow_step: string;
+  node_id: string;
+  attempt: number; // the step attempt whose artifact this approval covers
+  level: number; // the node's risk_level (2-4)
+  activity: string; // human-readable step name
+  output_artifact: string;
+  summary: string; // why approval is needed
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+  decided_by?: string; // "founder" (the human) or an authorized approver
+  decided_at?: string;
+  reason?: string; // decision note (esp. on reject)
+}
+
 export interface RunState {
   id: string;
   idea: string;
@@ -243,6 +263,10 @@ export interface RunState {
   step_attempts: Record<string, number>;
   jump_counts: Record<string, number>;
   path: PathEntry[];
+  // Human-approval gates raised for this run (assisted mode). Optional because
+  // simulation runs and pre-1c runs have none. A run holding with a pending
+  // entry here is "awaiting approval" and resumes only via approve/reject.
+  approvals?: ApprovalRequest[];
   // Total step-executions (creator attempts) across the whole run, regardless
   // of which flow step - a hard ceiling independent of the per-step/per-target
   // bounds above, so no combination of retries/jumps can hang the run.

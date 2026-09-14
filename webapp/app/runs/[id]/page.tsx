@@ -68,6 +68,21 @@ interface PathEntry {
   at: string;
 }
 
+interface ApprovalRequest {
+  id: string;
+  flow_step: string;
+  attempt: number;
+  level: number;
+  activity: string;
+  output_artifact: string;
+  summary: string;
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+  decided_by?: string;
+  decided_at?: string;
+  reason?: string;
+}
+
 const ROLE_LABELS: Record<TaskRole, string> = {
   creator: "Creator",
   critic: "Critic",
@@ -115,6 +130,8 @@ interface RunState {
   model: string;
   key_source: "user_provided" | "server_env";
   path: PathEntry[];
+  mode?: "assisted" | "simulation";
+  approvals?: ApprovalRequest[];
 }
 
 const PROVIDER_LABELS: Record<RunState["provider"], string> = {
@@ -153,6 +170,11 @@ export default function RunPage() {
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [approvalReason, setApprovalReason] = useState("");
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const pendingApprovalRef = useRef<{ approvalId: string; decision: "approve" | "reject" } | null>(
+    null,
+  );
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
 
@@ -234,6 +256,49 @@ export default function RunPage() {
     }
   }
 
+  // Resolve a pending assisted-mode approval (Phase 1c). Approve advances past
+  // the gate; reject reworks it. Mirrors attemptResume's key handling: a missing
+  // key opens the same modal, which re-invokes this with the key supplied.
+  async function resolveApproval(
+    approvalId: string,
+    decision: "approve" | "reject",
+    keyOverride?: string,
+  ) {
+    setResolvingId(approvalId);
+    setResumeError(null);
+    try {
+      const res = await fetch(`/api/runs/${params.id}/approvals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          approvalId,
+          decision,
+          reason: approvalReason.trim() || undefined,
+          ...(keyOverride ? { apiKey: keyOverride } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (typeof data.error === "string" && data.error.includes("No API key supplied")) {
+          pendingApprovalRef.current = { approvalId, decision };
+          setKeyModalOpen(true);
+        } else {
+          setResumeError(data.error ?? "Failed to resolve approval.");
+        }
+        return;
+      }
+      pendingApprovalRef.current = null;
+      setKeyModalOpen(false);
+      setResumeKey("");
+      setApprovalReason("");
+      poll();
+    } catch {
+      setResumeError("Failed to resolve approval.");
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
   async function handleCancel() {
     setCancelling(true);
     try {
@@ -270,6 +335,7 @@ export default function RunPage() {
   const pct = Math.round((doneCount / run.total_steps) * 100);
   const phases = groupByPhase(run.steps);
   const lastPathEntry = run.path.length ? run.path[run.path.length - 1] : null;
+  const pendingApprovals = (run.approvals ?? []).filter((a) => a.status === "pending");
 
   return (
     <main>
@@ -308,7 +374,46 @@ export default function RunPage() {
         </div>
       )}
 
-      {run.status === "held" && (
+      {run.status === "held" && pendingApprovals.length > 0 && (
+        <div className="top-error">
+          <div style={{ marginBottom: 10, fontWeight: 600 }}>
+            Awaiting your approval — {pendingApprovals.length} decision gate
+            {pendingApprovals.length > 1 ? "s" : ""} paused (assisted mode). The run does
+            not proceed until you decide.
+          </div>
+          {pendingApprovals.map((a) => (
+            <div
+              key={a.id}
+              style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+            >
+              <div style={{ marginBottom: 4 }}>
+                Step {a.flow_step} — {a.activity}{" "}
+                <span className="badge pending">Level {a.level}</span>
+              </div>
+              <div className="field-hint" style={{ marginBottom: 8 }}>
+                {a.summary}
+              </div>
+              <textarea
+                placeholder="Optional note / reason (shown on the decision)"
+                value={approvalReason}
+                onChange={(e) => setApprovalReason(e.target.value)}
+                style={{ width: "100%", minHeight: 48, marginBottom: 8, boxSizing: "border-box" }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => resolveApproval(a.id, "approve")} disabled={resolvingId === a.id}>
+                  {resolvingId === a.id ? "Working…" : "Approve & continue"}
+                </button>
+                <button onClick={() => resolveApproval(a.id, "reject")} disabled={resolvingId === a.id}>
+                  Reject & rework
+                </button>
+              </div>
+            </div>
+          ))}
+          {resumeError && <div className="step-reason">{resumeError}</div>}
+        </div>
+      )}
+
+      {run.status === "held" && pendingApprovals.length === 0 && (
         <div className="top-error">
           <div style={{ marginBottom: 8 }}>
             Paused at step {lastPathEntry?.flow_step}: {lastPathEntry?.reason} Resumable —
@@ -367,10 +472,14 @@ export default function RunPage() {
                 Cancel
               </button>
               <button
-                onClick={() => attemptResume(resumeKey)}
-                disabled={resuming || !resumeKey.trim()}
+                onClick={() => {
+                  const pa = pendingApprovalRef.current;
+                  if (pa) resolveApproval(pa.approvalId, pa.decision, resumeKey);
+                  else attemptResume(resumeKey);
+                }}
+                disabled={resuming || resolvingId !== null || !resumeKey.trim()}
               >
-                {resuming ? "Continuing…" : "Continue"}
+                {resuming || resolvingId ? "Continuing…" : "Continue"}
               </button>
             </div>
           </div>
