@@ -26,6 +26,27 @@ const PROVIDER_KEY_HELP: Record<LLMProvider, string> = {
   gemini: "aistudio.google.com/apikey",
 };
 
+interface RiskFlag {
+  kind: string;
+  detail: string;
+  suggested_pack: string;
+}
+
+interface BusinessProfile {
+  idea: string;
+  industry: string;
+  business_model: string;
+  geography: string[];
+  customer: string;
+  maturity: string;
+  capital_intensity: string;
+  risk_flags: RiskFlag[];
+  constraints: string[];
+  confidence: "high" | "medium" | "low";
+  open_questions: string[];
+  validation_notes: string[];
+}
+
 interface RunSummary {
   id: string;
   idea: string;
@@ -48,6 +69,9 @@ export default function HomePage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [profile, setProfile] = useState<BusinessProfile | null>(null);
+  const [classifying, setClassifying] = useState(false);
+  const [classifyError, setClassifyError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/runs")
@@ -66,6 +90,28 @@ export default function HomePage() {
     setApiKey("");
   }
 
+  async function handleClassify() {
+    if (!idea.trim() || classifying) return;
+    setClassifying(true);
+    setClassifyError(null);
+    try {
+      const res = await fetch("/api/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idea, provider, model, apiKey }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to classify idea");
+      }
+      setProfile(data.profile as BusinessProfile);
+    } catch (err) {
+      setClassifyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setClassifying(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!idea.trim() || submitting) return;
@@ -75,7 +121,7 @@ export default function HomePage() {
       const res = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, provider, model, apiKey, mode }),
+        body: JSON.stringify({ idea, provider, model, apiKey, mode, profile: profile ?? undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -107,7 +153,10 @@ export default function HomePage() {
         <textarea
           placeholder="e.g. A subscription service that helps small accounting firms automate client onboarding and document collection..."
           value={idea}
-          onChange={(e) => setIdea(e.target.value)}
+          onChange={(e) => {
+            setIdea(e.target.value);
+            setProfile(null); // a changed idea invalidates a prior classification
+          }}
           disabled={submitting}
           maxLength={4000}
         />
@@ -183,6 +232,74 @@ export default function HomePage() {
               ? "Agents draft and plan, but must stop and mark any consequential action (pricing, deploys, spend, hiring, legal, funds) as PENDING_HUMAN_APPROVAL instead of deciding it themselves."
               : "Agents decide every step themselves with no human gate — including actions that would normally need sign-off. Produces plans and drafts only; nothing is executed in the real world. Use for exploration, not for decisions you would act on."}
           </p>
+        </div>
+
+        <div className="field">
+          <label>Business profile (optional intake)</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={handleClassify}
+              disabled={classifying || submitting || !idea.trim()}
+            >
+              {classifying ? "Classifying…" : profile ? "Re-classify idea" : "Preview business profile"}
+            </button>
+            <span className="field-hint" style={{ margin: 0 }}>
+              Classify the idea (industry, model, risks) before building. Uses one API call.
+            </span>
+          </div>
+          {classifyError && <div className="error-box" style={{ marginTop: 8 }}>{classifyError}</div>}
+          {profile && (
+            <div
+              style={{
+                marginTop: 10,
+                border: "1px solid var(--border)",
+                borderRadius: 8,
+                padding: 12,
+              }}
+            >
+              <div style={{ marginBottom: 6 }}>
+                <strong>{profile.industry}</strong> · {profile.business_model} ·{" "}
+                <span className="badge pending">{profile.confidence} confidence</span>
+              </div>
+              <div className="field-hint" style={{ marginBottom: 4 }}>
+                Customer: {profile.customer} · Maturity: {profile.maturity} · Capital:{" "}
+                {profile.capital_intensity}
+                {profile.geography.length > 0 && ` · Geo: ${profile.geography.join(", ")}`}
+              </div>
+              {profile.constraints.length > 0 && (
+                <div className="field-hint" style={{ marginBottom: 4 }}>
+                  Constraints: {profile.constraints.join("; ")}
+                </div>
+              )}
+              {profile.risk_flags.length > 0 && (
+                <div style={{ marginBottom: 4 }}>
+                  {profile.risk_flags.map((r, i) => (
+                    <span key={i} className="badge blocked" style={{ marginRight: 6 }}>
+                      {r.kind}: {r.suggested_pack || r.detail}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {profile.risk_flags.length === 0 && (
+                <div className="field-hint">No special risk packs flagged — plain build.</div>
+              )}
+              {profile.open_questions.length > 0 && (
+                <div className="field-hint" style={{ marginTop: 6 }}>
+                  Open questions: {profile.open_questions.join(" · ")}
+                </div>
+              )}
+              {profile.validation_notes.length > 0 && (
+                <div className="field-hint" style={{ marginTop: 6, opacity: 0.8 }}>
+                  {profile.validation_notes.join(" ")}
+                </div>
+              )}
+              <div className="field-hint" style={{ marginTop: 6 }}>
+                This profile will be attached to the run. Edit the idea above and re-classify to
+                refine it.
+              </div>
+            </div>
+          )}
         </div>
 
         <div>

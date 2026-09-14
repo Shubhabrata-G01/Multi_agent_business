@@ -159,6 +159,41 @@ export type Medium =
   | "telemetry"
   | "external-record";
 
+// What the classifier detects about an idea before any planning/execution -
+// company/architecture/12-business-os-evolution.md §3.3. Drives which capability
+// packs a future planner would activate (Phase 1b); for now it is informational
+// and reviewed by the founder before a run starts.
+export interface RiskFlag {
+  kind:
+    | "regulatory"
+    | "payments"
+    | "health-data"
+    | "physical-safety"
+    | "financial-custody"
+    | "employment"
+    | "ip"
+    | "other";
+  detail: string;
+  suggested_pack: string; // capability pack id this flag would activate
+}
+
+export interface BusinessProfile {
+  idea: string; // the raw idea, preserved verbatim (never the model's paraphrase)
+  industry: string;
+  business_model: string;
+  geography: string[];
+  customer: string;
+  maturity: "idea" | "prototype" | "launched" | "scaling";
+  capital_intensity: "low" | "medium" | "high";
+  risk_flags: RiskFlag[];
+  constraints: string[];
+  confidence: "high" | "medium" | "low";
+  open_questions: string[];
+  // Filled by parseBusinessProfile/validateBusinessProfile - what a deterministic
+  // post-check normalized and why. Never a silent rewrite.
+  validation_notes: string[];
+}
+
 // A WorkflowNode is a strict superset of FlowStepDef (so the existing 81-step
 // flow maps 1:1 into software-saas-v1 with zero data loss and the engine keeps
 // reading the same fields) plus the precomputed routing/gate fields the
@@ -251,6 +286,10 @@ export interface RunState {
   // runs fall back to the global 81-step flow and the module-level budget
   // ceilings, i.e. exactly their original behavior. New runs always set it.
   config?: RunConfig;
+  // The classifier's BusinessProfile for this run's idea, when one was produced
+  // at intake (Phase 0c). Optional/informational today; a future planner uses it
+  // to compose a per-idea roadmap and activate capability packs.
+  profile?: BusinessProfile;
   // Where the API key for this run came from - NEVER the key itself, and
   // never even a prefix of it. Lets the UI show "using your key" vs
   // "using the server's configured key" so which credential is active is

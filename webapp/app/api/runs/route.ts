@@ -69,9 +69,17 @@ export async function POST(request: Request) {
   // legacy fully-autonomous behavior. See lib/types.ts ExecutionMode.
   const rawMode = obj.mode === "simulation" ? "simulation" : "assisted";
 
+  // Optional BusinessProfile from the intake step (Phase 0c). It originates from
+  // this app's own /api/classify, so it's accepted as-is when present; the run
+  // stores it as informational context. Absent for the direct "just run it" path.
+  const profile =
+    typeof obj.profile === "object" && obj.profile !== null && "idea" in obj.profile
+      ? (obj.profile as Parameters<typeof startRun>[5])
+      : undefined;
+
   let id: string;
   try {
-    id = startRun(idea, provider, model, apiKey, rawMode);
+    id = startRun(idea, provider, model, apiKey, rawMode, profile);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing key on both the request and the server env is the caller's

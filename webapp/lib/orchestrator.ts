@@ -28,6 +28,7 @@ import { buildSoftwareSaasV1Roadmap } from "./templates/softwareSaasV1";
 import type {
   ApprovalRequest,
   ArtifactMeta,
+  BusinessProfile,
   ExecutionMode,
   FlowStepDef,
   GateAction,
@@ -984,6 +985,7 @@ function initRun(
   keySource: "user_provided" | "server_env",
   mode: ExecutionMode,
   roadmap: Roadmap,
+  profile: BusinessProfile | undefined,
 ): RunState {
   // Steps are built from the run's own roadmap nodes, not the global flow -
   // this is the seam that makes the workflow a per-run input (Phase 0b). For
@@ -1045,6 +1047,7 @@ function initRun(
     model,
     mode,
     config,
+    profile,
     key_source: keySource,
     step_attempts: {},
     jump_counts: {},
@@ -1595,6 +1598,7 @@ export function startRun(
   model: string,
   suppliedApiKey: string | undefined,
   mode: ExecutionMode = "assisted",
+  profile: BusinessProfile | undefined = undefined,
 ): string {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
@@ -1618,7 +1622,7 @@ export function startRun(
     );
   }
 
-  const run = initRun(id, idea, provider, model, source, mode, roadmap);
+  const run = initRun(id, idea, provider, model, source, mode, roadmap, profile);
   saveRun(run);
   if (source === "user_provided") {
     cacheApiKey(id, apiKey);
