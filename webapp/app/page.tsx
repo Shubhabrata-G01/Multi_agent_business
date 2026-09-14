@@ -35,6 +35,7 @@ interface RunSummary {
   total_steps: number;
   provider: LLMProvider;
   model: string;
+  mode?: "assisted" | "simulation";
 }
 
 export default function HomePage() {
@@ -43,6 +44,7 @@ export default function HomePage() {
   const [provider, setProvider] = useState<LLMProvider>("anthropic");
   const [model, setModel] = useState(PROVIDER_DEFAULT_MODEL.anthropic);
   const [apiKey, setApiKey] = useState("");
+  const [mode, setMode] = useState<"assisted" | "simulation">("assisted");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -73,7 +75,7 @@ export default function HomePage() {
       const res = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, provider, model, apiKey }),
+        body: JSON.stringify({ idea, provider, model, apiKey, mode }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -92,11 +94,13 @@ export default function HomePage() {
       <p className="subtitle">
         Describe a business idea. A 38-agent AI organization — CEO, CTO, CFO,
         Product, Design, Engineering, AI/Data, Growth, Sales, Customer
-        Success, Finance, Legal, People, Operations — will run it
-        autonomously through all 81 steps of the company&apos;s
-        idea-to-expansion business flow. This run is fully autonomous — no
-        approval gates. Every step is a real, billed API call using the
-        provider and key you choose below.
+        Success, Finance, Legal, People, Operations — will work through all 81
+        steps of the company&apos;s idea-to-expansion business flow. Choose the
+        execution mode below: <strong>Assisted</strong> (approval-gated —
+        agents flag consequential actions for human sign-off) or{" "}
+        <strong>Simulation</strong> (fully autonomous, plans and drafts only).
+        Every step is a real, billed API call using the provider and key you
+        choose below.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -161,6 +165,26 @@ export default function HomePage() {
           </p>
         </div>
 
+        <div className="field">
+          <label htmlFor="mode">Execution mode</label>
+          <select
+            id="mode"
+            value={mode}
+            onChange={(e) => setMode(e.target.value as "assisted" | "simulation")}
+            disabled={submitting}
+          >
+            <option value="assisted">
+              Assisted — approval-gated (recommended)
+            </option>
+            <option value="simulation">Simulation — fully autonomous</option>
+          </select>
+          <p className="field-hint">
+            {mode === "assisted"
+              ? "Agents draft and plan, but must stop and mark any consequential action (pricing, deploys, spend, hiring, legal, funds) as PENDING_HUMAN_APPROVAL instead of deciding it themselves."
+              : "Agents decide every step themselves with no human gate — including actions that would normally need sign-off. Produces plans and drafts only; nothing is executed in the real world. Use for exploration, not for decisions you would act on."}
+          </p>
+        </div>
+
         <div>
           <button type="submit" disabled={submitting || !idea.trim()}>
             {submitting ? "Starting…" : "Build my business"}
@@ -177,6 +201,7 @@ export default function HomePage() {
               <div className="idea">{r.idea}</div>
               <div className="meta">
                 <span className={`badge ${r.status}`}>{r.status}</span>
+                <span>{r.mode ?? "simulation"}</span>
                 <span>
                   {PROVIDER_LABELS[r.provider] ?? r.provider} · {r.model}
                 </span>

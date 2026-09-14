@@ -41,6 +41,12 @@ export function getAgentById(id: string): RegistryAgent | undefined {
   return loadRegistry().find((a) => a.id === id);
 }
 
+/** The full registry, for checks that need to reason across all agents (e.g. the
+ * roadmap-integrity "named integrator per domain" check). */
+export function getAllAgents(): RegistryAgent[] {
+  return loadRegistry();
+}
+
 /** Full spec markdown for an agent, read once and cached in memory. */
 export function getAgentSpecText(id: string): string {
   const cached = _specCache.get(id);

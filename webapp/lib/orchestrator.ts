@@ -6,6 +6,9 @@ import {
   validateArtifactMeta,
 } from "./artifactMeta";
 import { recordGateDecision, saveArtifactVersion } from "./artifactStore";
+import { validateClaimSources } from "./claimSourceValidator";
+import { checkArtifactMedium } from "./mediumValidator";
+import { roadmapIntegrityErrors } from "./roadmapIntegrity";
 import {
   getAgentById,
   getAgentSpecText,
@@ -21,18 +24,32 @@ import { renderIntegrationNotice } from "./integrations";
 import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
+import { buildSoftwareSaasV1Roadmap } from "./templates/softwareSaasV1";
 import type {
   ArtifactMeta,
+  ExecutionMode,
   FlowStepDef,
   GateAction,
   LLMProvider,
   RegistryAgent,
+  Roadmap,
+  RunConfig,
   RunState,
   StepResult,
   StepTask,
   TaskRole,
   TaskVerdict,
 } from "./types";
+
+// Runs created before the ExecutionMode field existed have no `mode` on disk;
+// they are treated as "simulation" so their behavior is exactly what it was when
+// they started (see ExecutionMode in ./types). New runs always set a mode.
+const DEFAULT_LEGACY_MODE: ExecutionMode = "simulation";
+function runMode(run: RunState): ExecutionMode {
+  // config.mode is canonical when present (Phase 0b+); run.mode is the 0a
+  // top-level mirror; a run with neither is a pre-0a legacy run (simulation).
+  return run.config?.mode ?? run.mode ?? DEFAULT_LEGACY_MODE;
+}
 
 const MAX_RUN_STEPS = Number(process.env.MAX_RUN_STEPS || 81);
 // Per-role token budgets. Creator calls regenerate a full artifact; Critic/
@@ -215,28 +232,57 @@ function webSearchEnabledFor(provider: LLMProvider, step: FlowStepDef): boolean 
   return provider === "anthropic" && ENABLE_WEB_SEARCH && isEvidenceLedPhase(step.business_phase);
 }
 
-function runtimeNotice(
+// Exported for unit testing of the simulation/assisted mode branching (Phase 0a).
+export function runtimeNotice(
   provider: LLMProvider,
   roleInstructions: string,
   connectedThisCall: string[] = [],
+  mode: ExecutionMode = DEFAULT_LEGACY_MODE,
 ): string {
+  // The file-access constraint is identical in both modes; only the pipeline
+  // framing and the autonomy/approval paragraph differ by mode.
+  const fileAccess = `You cannot read any other file
+mentioned in your spec above (including the company/architecture/ and
+company/workflow/ documents it references) - rely only on your spec above and
+the context given to you in the user message.`;
+
+  const pipelineFraming =
+    mode === "simulation"
+      ? `You are being invoked headlessly through the ${PROVIDER_LABELS[provider]} API
+as one step in an automated, unattended pipeline that is building a real
+business end to end from a single idea, autonomously, with no human reviewing
+each step before the next one runs. ${fileAccess}`
+      : `You are being invoked headlessly through the ${PROVIDER_LABELS[provider]} API
+as one step in an assisted, approval-gated pipeline that plans and drafts a real
+business end to end from a single idea. Consequential real-world actions are NOT
+taken autonomously in this mode. ${fileAccess}`;
+
+  const autonomy =
+    mode === "simulation"
+      ? `Because this run is fully autonomous, do not defer a decision to "a human"
+or pause for approval even where your spec's Human Approval Requirements section
+would normally require it in a human-operated version of this organization -
+make the best call yourself, state it as a clear DECISION with your reasoning and
+confidence, and move the business forward. Note any real-world risk of that
+autonomy in your output rather than silently absorbing it.`
+      : `This run is APPROVAL-GATED, not autonomous. Where your spec's Human Approval
+Requirements section marks an action Level 2 or higher (see
+05-permissions-and-hitl.md) - e.g. pricing changes, production deploys, spending
+money, customer/external communication at scale, hiring, legal execution, or
+moving funds - you must NOT assert that decision as made. Prepare it fully
+(draft, plan, evidence, recommendation), then record it as a DECISION whose
+status is PENDING_HUMAN_APPROVAL, name who must approve it, and stop at that gate
+rather than proceeding as if approved. Level 0/1 work (analysis, drafts, internal
+docs) you complete normally. Never represent an approval you do not have.
+(Hard runtime enforcement - pausing the run and emitting an ApprovalRequest -
+lands in a later phase; until then this instruction is the control, so honor it
+strictly.)`;
+
   return `---
 
 ## Runtime notice (read this)
 
-You are being invoked headlessly through the ${PROVIDER_LABELS[provider]} API
-as one step in an automated, unattended pipeline that is building a real
-business end to end from a single idea, autonomously, with no human
-reviewing each step before the next one runs. You cannot read any other file
-mentioned in your spec above (including the company/architecture/ and
-company/workflow/ documents it references) - rely only on your spec above and
-the context given to you in the user message. Because this run is fully
-autonomous, do not defer a decision to "a human" or pause for approval even
-where your spec's Human Approval Requirements section would normally require
-it in a human-operated version of this organization - make the best call
-yourself, state it as a clear DECISION with your reasoning and confidence,
-and move the business forward. Note any real-world risk of that autonomy in
-your output rather than silently absorbing it.
+${pipelineFraming} ${autonomy}
 
 ${renderIntegrationNotice(connectedThisCall)}
 
@@ -247,6 +293,7 @@ function buildSystemPrompt(
   agentSpecText: string,
   provider: LLMProvider,
   connectedThisCall: string[] = [],
+  mode: ExecutionMode = DEFAULT_LEGACY_MODE,
 ): string {
   const webSearchGuidance = connectedThisCall.includes(WEB_RESEARCH_INTEGRATION_NAME)
     ? `
@@ -271,10 +318,15 @@ ${runtimeNotice(
 
 ${ARTIFACT_META_INSTRUCTIONS}`,
   connectedThisCall,
+  mode,
 )}`;
 }
 
-function buildCriticSystemPrompt(agentSpecText: string, provider: LLMProvider): string {
+function buildCriticSystemPrompt(
+  agentSpecText: string,
+  provider: LLMProvider,
+  mode: ExecutionMode = DEFAULT_LEGACY_MODE,
+): string {
   return `${agentSpecText}
 
 ${runtimeNotice(
@@ -303,10 +355,16 @@ VERDICT: APPROVED
 VERDICT: CHANGES_REQUESTED | REASON: <one sentence>
 Use CHANGES_REQUESTED only for a real, specific, checkable problem - not
 stylistic preference.`,
+  [],
+  mode,
 )}`;
 }
 
-function buildApproverSystemPrompt(agentSpecText: string, provider: LLMProvider): string {
+function buildApproverSystemPrompt(
+  agentSpecText: string,
+  provider: LLMProvider,
+  mode: ExecutionMode = DEFAULT_LEGACY_MODE,
+): string {
   return `${agentSpecText}
 
 ${runtimeNotice(
@@ -324,10 +382,16 @@ Respond with your reasoning as Markdown, then end with exactly one of these
 two lines, on its own line:
 APPROVAL: APPROVED
 APPROVAL: REJECTED | REASON: <one sentence>`,
+  [],
+  mode,
 )}`;
 }
 
-function buildExecutorSystemPrompt(agentSpecText: string, provider: LLMProvider): string {
+function buildExecutorSystemPrompt(
+  agentSpecText: string,
+  provider: LLMProvider,
+  mode: ExecutionMode = DEFAULT_LEGACY_MODE,
+): string {
   return `${agentSpecText}
 
 ${runtimeNotice(
@@ -344,6 +408,8 @@ Respond with the Execution Directive as Markdown, then end with exactly one
 of these two lines, on its own line:
 STATUS: OK
 STATUS: BLOCKED | REASON: <one sentence>`,
+  [],
+  mode,
 )}`;
 }
 
@@ -351,6 +417,7 @@ function buildContributorSystemPrompt(
   agentSpecText: string,
   provider: LLMProvider,
   label: string,
+  mode: ExecutionMode = DEFAULT_LEGACY_MODE,
 ): string {
   return `${agentSpecText}
 
@@ -365,6 +432,8 @@ Respond with your "${label}" contribution, in full, as Markdown - no
 preamble, no "Here is the artifact" framing.
 
 ${ARTIFACT_META_INSTRUCTIONS}`,
+  [],
+  mode,
 )}`;
 }
 
@@ -776,13 +845,18 @@ interface GateResult {
  * steps, matching what the business flow's own loop_reentry_condition text
  * actually asks for.
  */
-function evaluateGate(
+// Exported for unit testing of the gate state machine (Phase 0b).
+export function evaluateGate(
   step: FlowStepDef,
   meta: ArtifactMeta,
   criticTasks: StepTask[],
   approverTask: StepTask | null,
   stepAttempts: Record<string, number>,
   jumpCounts: Record<string, number>,
+  // Count of unresolved claim-source integrity violations on this attempt (see
+  // claimSourceValidator.ts / §7.1). Optional and defaulting to 0 so existing
+  // call sites and tests are unaffected.
+  integrityViolations = 0,
 ): GateResult {
   const priorAttempts = stepAttempts[step.flow_step] ?? 0;
   const evidenceLed = isEvidenceLedPhase(step.business_phase);
@@ -795,6 +869,23 @@ function evaluateGate(
     return {
       action: "no_go_exit",
       reason: meta.reason ?? "Creator recorded a No-Go decision.",
+    };
+  }
+
+  // A gate or evidence-led step cannot pass with an unresolved claim-source
+  // integrity violation (a FACT that cited an unavailable tool). Retry for real
+  // evidence within the bound, then hold. On ordinary steps the per-claim
+  // downgrade + note is sufficient and the step still advances.
+  if (integrityViolations > 0 && (gate || evidenceLed)) {
+    if (priorAttempts < MAX_RETRIES_PER_STEP) {
+      return {
+        action: "retry_step",
+        reason: `${integrityViolations} claim-source integrity violation(s) on a ${gate ? "gate" : "evidence-led"} step - FACT(s) cited tools not connected for this run; retrying for real evidence.`,
+      };
+    }
+    return {
+      action: "held",
+      reason: `Unresolved claim-source integrity violation(s) with the retry bound exhausted.`,
     };
   }
 
@@ -844,18 +935,28 @@ function initRun(
   provider: LLMProvider,
   model: string,
   keySource: "user_provided" | "server_env",
+  mode: ExecutionMode,
+  roadmap: Roadmap,
 ): RunState {
-  const flowSteps = getFlowSteps().slice(0, MAX_RUN_STEPS);
-  const steps: StepResult[] = flowSteps.map((s) => {
-    const primaryAgents = getPrimaryAgentsForStep(s.flow_step);
-    const agent = primaryAgents[0];
+  // Steps are built from the run's own roadmap nodes, not the global flow -
+  // this is the seam that makes the workflow a per-run input (Phase 0b). For
+  // software-saas-v1 the nodes are exactly the 81 flow steps in order, so this
+  // produces the identical step list initRun produced before (asserted by the
+  // adapter-fidelity test).
+  const nodes = roadmap.nodes.slice(0, MAX_RUN_STEPS);
+  const steps: StepResult[] = nodes.map((node) => {
+    // A node's Creator is its first required capability; resolve it to a
+    // registry agent for the display name (same agent getPrimaryAgentsForStep
+    // returned before, since that's how the adapter populated the node).
+    const agentId = node.required_capabilities[0];
+    const agent = agentId ? getAgentById(agentId) : undefined;
     return {
-      flow_step: s.flow_step,
-      business_phase: s.business_phase,
-      activity: s.activity,
+      flow_step: node.flow_step,
+      business_phase: node.business_phase,
+      activity: node.activity,
       agent_id: agent?.id ?? "UNKNOWN",
-      agent_name: agent?.name ?? s.primary_role,
-      output_artifact: s.output_artifact,
+      agent_name: agent?.name ?? node.primary_role,
+      output_artifact: node.output_artifact,
       status: "pending",
       content: null,
       reason: null,
@@ -864,13 +965,23 @@ function initRun(
       input_tokens: null,
       output_tokens: null,
       tasks: [],
-      is_gate: isGateStep(s),
+      is_gate: node.is_gate,
       attempt: 0,
       meta: null,
       gate_decision: null,
       gate_reason: null,
     };
   });
+
+  const config: RunConfig = {
+    mode,
+    roadmap,
+    budget: {
+      max_total_tokens: MAX_RUN_TOTAL_TOKENS,
+      max_total_executions: MAX_TOTAL_STEP_EXECUTIONS,
+    },
+    enabled_tool_scopes: [],
+  };
 
   const now = new Date().toISOString();
   return {
@@ -885,6 +996,8 @@ function initRun(
     error: null,
     provider,
     model,
+    mode,
+    config,
     key_source: keySource,
     step_attempts: {},
     jump_counts: {},
@@ -906,7 +1019,14 @@ async function executeRun(
   model: string,
   apiKey: string,
 ): Promise<void> {
-  const flowSteps = getFlowSteps().slice(0, MAX_RUN_STEPS);
+  // The steps a run walks come from its own roadmap (Phase 0b). Legacy runs
+  // created before the config field existed have no roadmap on disk, so they
+  // fall back to the global 81-step flow - exactly their original behavior.
+  const initial = loadRun(id);
+  const roadmap = initial?.config?.roadmap;
+  const flowSteps: FlowStepDef[] = roadmap
+    ? roadmap.nodes.slice(0, MAX_RUN_STEPS)
+    : getFlowSteps().slice(0, MAX_RUN_STEPS);
   const flowIndexByStep = new Map(flowSteps.map((s, idx) => [s.flow_step, idx]));
 
   for (;;) {
@@ -915,7 +1035,12 @@ async function executeRun(
     if (run.status !== "running") return;
     if (run.current_step_index >= flowSteps.length) break;
 
-    if (run.total_executions >= MAX_TOTAL_STEP_EXECUTIONS) {
+    // Budget ceilings are per-run (config.budget) when present, falling back to
+    // the module-level defaults for legacy runs.
+    const maxExecutions = run.config?.budget?.max_total_executions ?? MAX_TOTAL_STEP_EXECUTIONS;
+    const maxTotalTokens = run.config?.budget?.max_total_tokens ?? MAX_RUN_TOTAL_TOKENS;
+
+    if (run.total_executions >= maxExecutions) {
       run.status = "held";
       run.error = null;
       run.updated_at = new Date().toISOString();
@@ -923,14 +1048,14 @@ async function executeRun(
       return;
     }
 
-    if (sumRunTokens(run) >= MAX_RUN_TOTAL_TOKENS) {
+    if (sumRunTokens(run) >= maxTotalTokens) {
       run.status = "held";
       run.error = null;
       run.path.push({
         flow_step: run.steps[run.current_step_index]?.flow_step ?? "",
         attempt: 0,
         decision: "held",
-        reason: `Run-wide token budget ceiling reached (${MAX_RUN_TOTAL_TOKENS.toLocaleString()} tokens).`,
+        reason: `Run-wide token budget ceiling reached (${maxTotalTokens.toLocaleString()} tokens).`,
         at: new Date().toISOString(),
       });
       run.updated_at = new Date().toISOString();
@@ -965,12 +1090,14 @@ async function executeRun(
         MAX_CRITICS_PER_STEP,
       );
       const gate = stepResult.is_gate;
+      const mode = runMode(run);
       const webSearch = webSearchEnabledFor(provider, stepDef);
       const creatorSpec = getAgentSpecText(creatorAgent.id);
       const creatorSystem = buildSystemPrompt(
         creatorSpec,
         provider,
         webSearch ? [WEB_RESEARCH_INTEGRATION_NAME] : [],
+        mode,
       );
 
       // 1. CREATOR
@@ -1029,7 +1156,7 @@ async function executeRun(
               pc,
               "critic",
               critic,
-              buildCriticSystemPrompt(getAgentSpecText(critic.id), provider),
+              buildCriticSystemPrompt(getAgentSpecText(critic.id), provider, mode),
               buildCriticUserMessage(stepDef, workingContent, creatorMeta),
               CRITIC_MAX_TOKENS,
               provider,
@@ -1085,7 +1212,7 @@ async function executeRun(
               pc,
               "contributor",
               agent,
-              buildContributorSystemPrompt(getAgentSpecText(agent.id), provider, c.label),
+              buildContributorSystemPrompt(getAgentSpecText(agent.id), provider, c.label, mode),
               buildContributorUserMessage(stepDef, workingContent, c.label),
               CONTRIBUTOR_MAX_TOKENS,
               provider,
@@ -1140,7 +1267,7 @@ async function executeRun(
             pc,
             "approver",
             approverAgent,
-            buildApproverSystemPrompt(getAgentSpecText(approverAgent.id), provider),
+            buildApproverSystemPrompt(getAgentSpecText(approverAgent.id), provider, mode),
             buildApproverUserMessage(stepDef, workingContent),
             APPROVER_MAX_TOKENS,
             provider,
@@ -1188,7 +1315,7 @@ async function executeRun(
               pc,
               "executor",
               executorAgent,
-              buildExecutorSystemPrompt(getAgentSpecText(executorAgent.id), provider),
+              buildExecutorSystemPrompt(getAgentSpecText(executorAgent.id), provider, mode),
               buildExecutorUserMessage(stepDef, nextStepDef, workingContent),
               EXECUTOR_MAX_TOKENS,
               provider,
@@ -1227,6 +1354,29 @@ async function executeRun(
         }
       }
 
+      // Deterministic claim-source consistency check (§7.1): downgrade any FACT
+      // whose cited source names a tool not connected for this call, appending a
+      // note per downgrade, and count the violations so a gate/evidence step can
+      // refuse to pass on one. Runs on the final (post-revision) meta so the
+      // corrected labels are what gets saved, gated, and read downstream.
+      const connectedForValidation = webSearch ? [WEB_RESEARCH_INTEGRATION_NAME] : [];
+      const claimCheck = validateClaimSources(creatorMeta, connectedForValidation);
+      creatorMeta = claimCheck.meta;
+      const integrityViolations = claimCheck.violations.length;
+
+      // Done-criteria <-> medium check (§7.1(2)): if this step's done-criteria
+      // imply a medium the run can't produce (deploy/prototype/telemetry/external
+      // record with no tool layer connected), watermark the artifact document-level
+      // and note it, so it never reads as operational completion. Non-blocking.
+      const mediumCheck = checkArtifactMedium(stepDef, run.config?.enabled_tool_scopes ?? []);
+      if (mediumCheck.shortfall && mediumCheck.watermark && mediumCheck.note) {
+        workingContent += `\n\n${mediumCheck.watermark}`;
+        creatorMeta = {
+          ...creatorMeta,
+          validation_notes: [...creatorMeta.validation_notes, mediumCheck.note],
+        };
+      }
+
       stepResult.content = workingContent;
       stepResult.meta = creatorMeta;
       stepResult.input_tokens = stepResult.tasks.reduce(
@@ -1263,6 +1413,7 @@ async function executeRun(
         approverTask,
         run.step_attempts,
         run.jump_counts,
+        integrityViolations,
       );
       stepResult.gate_decision = gateResult.action;
       stepResult.gate_reason = gateResult.reason;
@@ -1341,11 +1492,31 @@ export function startRun(
   provider: LLMProvider,
   model: string,
   suppliedApiKey: string | undefined,
+  mode: ExecutionMode = "assisted",
 ): string {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
   const id = crypto.randomUUID();
-  const run = initRun(id, idea, provider, model, source);
+  // Phase 0b: every new run gets an explicit roadmap. Today that's always the
+  // software-saas-v1 template (the adapted 81-step flow); Phase 0c will generate
+  // a per-idea roadmap and pass it here instead.
+  const roadmap = buildSoftwareSaasV1Roadmap();
+
+  // §7.2 compose-time guard: never start a run on a structurally broken roadmap
+  // (a node with no owner, a dangling dependency, a self-reviewing primary, an
+  // unknown capability). Warnings are non-blocking and left to surface elsewhere;
+  // only errors refuse the run. The software-saas-v1 template has zero errors, so
+  // this only ever bites a future generated/edited roadmap.
+  const integrityErrors = roadmapIntegrityErrors(roadmap);
+  if (integrityErrors.length > 0) {
+    throw new Error(
+      `Roadmap failed integrity checks and will not run: ${integrityErrors
+        .map((e) => e.detail)
+        .join(" | ")}`,
+    );
+  }
+
+  const run = initRun(id, idea, provider, model, source, mode, roadmap);
   saveRun(run);
   if (source === "user_provided") {
     cacheApiKey(id, apiKey);

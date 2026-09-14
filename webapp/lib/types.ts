@@ -136,6 +136,69 @@ export type RunStatus =
 
 export type LLMProvider = "anthropic" | "groq" | "openrouter" | "gemini";
 
+// How a run treats the org's Human Approval Requirements
+// (company/architecture/05-permissions-and-hitl.md). See
+// company/architecture/12-business-os-evolution.md §3.1.
+// - "simulation": the legacy behavior - agents self-decide even Level 2+ actions
+//   and the run never pauses for a human. Produces plans/drafts only; no real
+//   side effects. Reproduces exactly what every run did before this field existed.
+// - "assisted": approval-gated. Agents must NOT assert a Level 2+ decision as made;
+//   they prepare it and mark it PENDING_HUMAN_APPROVAL. This is the safe default
+//   for new runs. (Hard runtime enforcement - pausing the run and emitting an
+//   ApprovalRequest - is a later phase; in 0a the runtime notice is the control.)
+export type ExecutionMode = "simulation" | "assisted";
+
+// The kind of evidence a step's done-criteria actually require. "document" is
+// always producible (a plan/spec/analysis). The others need a real capability
+// the run may or may not have: a design tool, a deploy pipeline, telemetry, or
+// an external system of record. See 12-business-os-evolution.md §7.1(2).
+export type Medium =
+  | "document"
+  | "live-prototype"
+  | "deployed"
+  | "telemetry"
+  | "external-record";
+
+// A WorkflowNode is a strict superset of FlowStepDef (so the existing 81-step
+// flow maps 1:1 into software-saas-v1 with zero data loss and the engine keeps
+// reading the same fields) plus the precomputed routing/gate fields the
+// orchestrator and the future compose-time integrity checks need. See
+// company/architecture/12-business-os-evolution.md §3.4.
+export interface WorkflowNode extends FlowStepDef {
+  id: string; // stable within a roadmap, e.g. "saas.05"
+  // Registry agent ids that can serve this node. In 0a/0b these are exactly the
+  // existing registry primary/supporting mappings; capability-based matching
+  // (Phase 1a) evolves how they're chosen, not the shape.
+  required_capabilities: string[]; // Creator candidate agent ids
+  reviewer_capabilities: string[]; // Critic agent ids
+  risk_level: 0 | 1 | 2 | 3 | 4; // maps to 05-permissions-and-hitl.md HITL levels
+  is_gate: boolean; // precomputed isGateStep()
+  evidence_led: boolean; // precomputed isEvidenceLedPhase()
+  depends_on: string[]; // node ids that must be done first (linear v1: the prior node)
+  loop_reentry_target?: string; // flow_step from parseReturnToStep(), if any
+  required_medium?: Medium; // evidence medium the done-criteria imply (§7.1(2))
+}
+
+// The composed/loaded workflow graph a single run walks. software-saas-v1 is a
+// template (generated_from unset); a per-idea roadmap sets generated_from.
+export interface Roadmap {
+  template_id: string;
+  packs: string[];
+  nodes: WorkflowNode[];
+}
+
+// What a run is parameterized by, beyond provider/model/key. See §3.2.
+export interface RunConfig {
+  mode: ExecutionMode;
+  roadmap: Roadmap;
+  budget: {
+    max_total_tokens: number;
+    max_total_executions: number;
+    max_usd?: number;
+  };
+  enabled_tool_scopes: string[]; // tool-registry ids this run may use; empty in simulation
+}
+
 // One entry per gate evaluation - the run's actual execution path, since steps can
 // now repeat or jump backward instead of always running 1..N once each.
 export interface PathEntry {
@@ -158,6 +221,16 @@ export interface RunState {
   error: string | null;
   provider: LLMProvider;
   model: string;
+  // How this run treats human-approval gates (see ExecutionMode). Optional
+  // because runs created before this field existed have no value on disk - those
+  // legacy runs are treated as "simulation" (their original behavior) on resume.
+  // New runs always set it, defaulting to the safer "assisted".
+  mode?: ExecutionMode;
+  // The per-run configuration (roadmap + budget + mode + tool scopes). Optional
+  // because runs created before Phase 0b have no config on disk - those legacy
+  // runs fall back to the global 81-step flow and the module-level budget
+  // ceilings, i.e. exactly their original behavior. New runs always set it.
+  config?: RunConfig;
   // Where the API key for this run came from - NEVER the key itself, and
   // never even a prefix of it. Lets the UI show "using your key" vs
   // "using the server's configured key" so which credential is active is

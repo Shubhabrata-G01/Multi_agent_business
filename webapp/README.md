@@ -3,9 +3,12 @@
 A standalone Next.js app: submit a business idea on a web page, pick an LLM
 provider and paste your key, and the 38-agent AI organization defined in
 `../company/` runs it, fully autonomously, through all (up to) 81 steps of
-`company/workflow/business-flow.json` — one real API call per step, using
-that step's primary agent's full spec (`company/agents/<dept>/<ID>.md`) as
-its system prompt.
+`company/workflow/business-flow.json`. Each step runs the step's Primary
+agent as Creator (its full spec, `company/agents/<dept>/<ID>.md`, is the
+system prompt), then the step's Supporting agents as independent Critics, a
+one-shot Creator revision incorporating their findings, and — on gate steps —
+an Approver and an Executor handoff. So a step is several real API calls, not
+one (see "How it works" below).
 
 ## Provider selection
 
@@ -70,18 +73,36 @@ Open http://localhost:3000.
 - `lib/businessFlow.ts` reads `../company/agents/registry.json` and
   `../company/workflow/business-flow.json` directly (no copy/build step —
   edit a spec in `company/` and it's picked up on next run).
-- `lib/orchestrator.ts` walks the 81 steps in order. For each step it looks
-  up the Primary agent (same mapping used to generate `.claude/agents/`),
-  loads that agent's full spec as the system prompt, and calls the chosen
-  provider with the step's instructions plus a rolling context window (full
-  text of the last 4 artifacts, one-line summaries of everything earlier).
+- `lib/orchestrator.ts` walks the flow as a graph, not a fixed 1..N list. A
+  program counter (`current_step_index`) advances through the steps, and for
+  each step it runs a four-eyes chain: the Primary agent as **Creator** (same
+  mapping used to generate `.claude/agents/`, full spec as system prompt),
+  the step's Supporting agents as parallel **Critics**, a one-shot Creator
+  **revision** folding in any `CHANGES_REQUESTED` findings, curated
+  **Contributor** sub-artifacts on specific steps, and — on gate steps — an
+  **Approver** (the Creator's manager) plus an **Executor** handoff to the
+  next step's owner. Each call gets a rolling context window (full text of the
+  last 4 artifacts, one-line summaries of everything earlier).
+- After each step, `evaluateGate` decides what happens next: **advance**,
+  **retry_step** (a fresh attempt on an evidence-led phase), **return_to_step**
+  (jump back to a `loop_reentry_condition` target), **no_go_exit** (a gate
+  recorded a No-Go), or **held** (retry/jump bounds exhausted). Every path is
+  independently bounded, with a hard `MAX_TOTAL_STEP_EXECUTIONS` ceiling so no
+  combination of retries/jumps can hang a run.
 - `lib/providers/index.ts` dispatches to the right provider implementation
   and resolves which API key to use (`resolveApiKey`).
-- Runs are persisted to `runs/<id>.json` (gitignored) so progress survives a
-  server restart; the UI polls `GET /api/runs/[id]` every ~2.5s.
-- A step that fails or reports `STATUS: BLOCKED` halts the run rather than
-  continuing on a broken chain — downstream steps depend on upstream
-  artifacts, so silently skipping one would corrupt everything after it.
+- Runs are persisted to `runs/<id>.json` (gitignored); the UI polls
+  `GET /api/runs/[id]` every ~2.5s. A run's full state (program counter,
+  attempts, jump counts) lives in that file, so a **held** or **failed** run
+  can be resumed from exactly the step it stopped on. Note the runner is an
+  in-process fire-and-forget loop, so a server restart mid-step can orphan a
+  `running` run — `healIfStale` detects this on the next read and flips it to
+  `failed` so it can be resumed (a durable queue is the planned fix; see
+  `../company/architecture/12-business-os-evolution.md`).
+- A Creator that reports `status: blocked` in its artifact-meta halts the run
+  rather than continuing on a broken chain — downstream steps depend on
+  upstream artifacts, so silently skipping one would corrupt everything after
+  it.
 - **Groq/OpenRouter max_tokens auto-correction:** models on these platforms
   enforce very different `max_tokens` ceilings - some cap in the low
   hundreds. If a request is rejected specifically for exceeding that
@@ -95,14 +116,17 @@ Open http://localhost:3000.
 
 ## Known simplifications (v1)
 
-- **One call per step**, using only the step's Primary agent — Supporting/
-  Reviewing agents named in the business flow are mentioned in the prompt
-  for context but not separately invoked. This keeps a full run at ~81 API
-  calls instead of several hundred.
-- **No loop/re-entry execution.** The org design's loop conditions (e.g.
-  "return to Step 29 until critical concerns are resolved") are shown to the
-  agent as context but not mechanically re-executed — the run is a single
-  linear pass through all 81 steps, not a graph with cycles.
+- **Integrations are mostly described, not invoked.** Except for Anthropic's
+  server-side web search on evidence-led Creator calls, the tools in
+  `lib/integrations.ts` are marked NOT CONNECTED and surfaced to agents as
+  context only — the run produces plans/drafts/specs, it does not deploy,
+  reconcile, update a CRM, or run a live experiment. A real tool-execution
+  layer is a planned phase (see
+  `../company/architecture/12-business-os-evolution.md`).
+- **Human approval is overridden, not enforced.** Every step runs without a
+  human gate even where the org design requires one — see "What 'fully
+  autonomous' means here" above. Making this a selectable simulation mode with
+  enforced approvals as the default is the top item in the evolution spec.
 - **Context beyond 4 steps back is a 1-line truncated summary**, not the
   full artifact — keeps token cost bounded on later steps but means a
   step 75 agent doesn't see the full text of, say, step 10's artifact.

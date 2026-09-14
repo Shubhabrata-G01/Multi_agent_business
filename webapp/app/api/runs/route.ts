@@ -20,6 +20,7 @@ export async function GET() {
       total_steps: r.total_steps,
       provider: r.provider,
       model: r.model,
+      mode: r.mode ?? "simulation",
     }));
   return NextResponse.json({ runs });
 }
@@ -63,9 +64,14 @@ export async function POST(request: Request) {
   const apiKey =
     typeof obj.apiKey === "string" && obj.apiKey.trim() ? obj.apiKey.trim() : undefined;
 
+  // Execution mode: how the run treats human-approval gates. Defaults to the
+  // safer "assisted" (approval-gated) when omitted; "simulation" reproduces the
+  // legacy fully-autonomous behavior. See lib/types.ts ExecutionMode.
+  const rawMode = obj.mode === "simulation" ? "simulation" : "assisted";
+
   let id: string;
   try {
-    id = startRun(idea, provider, model, apiKey);
+    id = startRun(idea, provider, model, apiKey, rawMode);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing key on both the request and the server env is the caller's
