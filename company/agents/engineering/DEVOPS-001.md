@@ -60,6 +60,23 @@ breaks.
   resilience, observability, capacity, and disaster recovery ahead of growth forecasts
   (step 69).
 
+**Disaster recovery & business continuity (end-to-end owner).** To close the gap
+where DR/compliance NFRs were split between architecture and operations with no single
+owner: DEVOPS-001 is the **accountable end-to-end owner of DR/BCP**. It sets the
+concrete recovery targets (RTO/RPO) per service *with* ARCH-001's architectural
+constraints and SEC-001's compliance requirements as inputs, implements backups and
+failover to meet them, and **runs periodic restore/failover drills** — a DR plan that
+is never test-restored does not count as met. ARCH-001 owns the architecture that
+makes those targets achievable; SEC-001 owns which compliance regimes set them;
+DEVOPS-001 owns that they are actually delivered and proven.
+
+**Non-production data policy (staging PII-masking).** Development and staging
+environments DEVOPS-001 provisions (step 39) must contain **only masked or synthetic
+data — never raw production PII**. DEVOPS-001 enforces this in environment
+provisioning and refresh; the masking/synthesis transform itself is owned by DE-001
+(Data Engineer) and reviewed by SEC-001. A non-prod environment found holding
+unmasked production PII is a security incident, not a convenience.
+
 ## Operating Modes
 
 | Flow Step # | Business Phase | Mode | What the agent does | Artifact |

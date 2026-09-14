@@ -288,15 +288,17 @@ test_cycle: "2026-08-10 to 2026-09-07 (4 weeks)"
 spend: "$3,850 of $4,000 budget"
 leads_generated: 62
 qualified_leads: 21
-measured_cac: "$55 (FACT — reconciled against ad-platform spend export and CRM
-  qualification records)"
+measured_cac: "$55 (ESTIMATE — manually compiled from the spend figure and CRM
+  qualification records; no ad-platform/analytics integration is connected this run
+  (see Required Integration), so this is a manual reconciliation, not a
+  system-verified figure)"
 target_cac: "<= $60"
 recommendation: "scale — CAC clears target with one full test cycle of data"
 qualified_leads_handoff: "21 leads passed to CRO-001 with CRM records complete"
 assumptions:
   - "ASSUMPTION: current $55 CAC holds as spend scales beyond the $4,000/month test
      budget (untested at higher volume)"
-confidence: "MEDIUM — one full test cycle clears target, but the channel is unproven
-  at scaled budget"
+confidence: "LOW-MEDIUM — figures are manually compiled (no analytics integration,
+  per this agent's Failure Handling), and the channel is unproven at scaled budget"
 related_flow_step: "65"
 ```
