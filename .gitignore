@@ -1,5 +1,4 @@
-.claude/
+.claude/scheduled_tasks.lock
 scratch/
-tools/
 *.pyc
 __pycache__/

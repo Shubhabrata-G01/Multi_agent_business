@@ -30,6 +30,8 @@ objective, do the work, hand off to the next agent, and be audited afterward.
     09-quality-and-confidence-standards.md <- fact/assumption/estimate labeling, failure handling
     10-company-dashboard.md          <- the KPI dashboard the CEO agent runs the company from
     11-artifact-repository-structure.md    <- where artifacts live and how they're tagged
+    12-business-os-evolution.md      <- proposed: idea->classify->compose roadmap->assisted execution
+    13-agent-spec-remediation.md     <- tracked backlog: content defects in the 38 specs + registry
   /governance
     decision-log-template.md
     assumption-register-template.md

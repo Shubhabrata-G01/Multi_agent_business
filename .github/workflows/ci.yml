@@ -1,0 +1,39 @@
+name: CI
+
+# Runs the webapp test suite, typecheck, and production build on every pull
+# request to main and on pushes to the main/sprint2 branches. The tests read the
+# sibling company/ directory (COMPANY_DIR defaults to <cwd>/../company), which is
+# present because the whole repo is checked out and the job runs in webapp/.
+on:
+  push:
+    branches: [main, sprint2]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: test / typecheck / build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webapp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: webapp/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests (vitest)
+        run: npm run test
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Production build
+        run: npm run build

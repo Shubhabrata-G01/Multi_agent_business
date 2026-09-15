@@ -1,0 +1,629 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useParams } from "next/navigation";
+
+type TaskRole = "creator" | "critic" | "approver" | "executor" | "contributor";
+type TaskVerdict = "approved" | "changes_requested" | "rejected" | null;
+type StepStatus = "pending" | "running" | "done" | "blocked" | "error";
+type Confidence = "high" | "medium" | "low";
+type Decision = "go" | "no_go" | "conditional" | null;
+type GateAction = "advance" | "retry_step" | "return_to_step" | "no_go_exit" | "held";
+
+interface ArtifactMeta {
+  status: "ok" | "blocked";
+  confidence: Confidence;
+  evidence_quality: Confidence;
+  decision: Decision;
+  claims: { type: string; text: string; source: string | null }[];
+  open_questions: string[];
+  reason: string | null;
+  validation_notes: string[];
+}
+
+interface StepTask {
+  role: TaskRole;
+  agent_id: string;
+  agent_name: string;
+  status: StepStatus;
+  content: string | null;
+  verdict: TaskVerdict;
+  reason: string | null;
+  model: string;
+}
+
+interface StepResult {
+  flow_step: string;
+  business_phase: string;
+  activity: string;
+  agent_id: string;
+  agent_name: string;
+  output_artifact: string;
+  status: StepStatus;
+  content: string | null;
+  reason: string | null;
+  tasks: StepTask[];
+  is_gate: boolean;
+  attempt: number;
+  meta: ArtifactMeta | null;
+  gate_decision: GateAction | null;
+  gate_reason: string | null;
+}
+
+interface ArtifactVersion {
+  attempt: number;
+  agent_name: string;
+  content: string;
+  meta: ArtifactMeta;
+  created_at: string;
+  gate_decision: GateAction | null;
+  gate_reason: string | null;
+}
+
+interface PathEntry {
+  flow_step: string;
+  attempt: number;
+  decision: GateAction;
+  reason: string | null;
+  at: string;
+}
+
+interface ApprovalRequest {
+  id: string;
+  flow_step: string;
+  attempt: number;
+  level: number;
+  activity: string;
+  output_artifact: string;
+  summary: string;
+  status: "pending" | "approved" | "rejected";
+  created_at: string;
+  decided_by?: string;
+  decided_at?: string;
+  reason?: string;
+}
+
+const ROLE_LABELS: Record<TaskRole, string> = {
+  creator: "Creator",
+  critic: "Critic",
+  approver: "Approver",
+  executor: "Executor",
+  contributor: "Contributor",
+};
+
+const GATE_ACTION_LABELS: Record<GateAction, string> = {
+  advance: "advanced",
+  retry_step: "retried",
+  return_to_step: "reworked from an earlier step",
+  no_go_exit: "No-Go — run stopped",
+  held: "held for review",
+};
+
+function taskBadgeClass(task: StepTask): string {
+  if (task.verdict === "approved") return "done";
+  if (task.verdict === "changes_requested" || task.verdict === "rejected") return "blocked";
+  return task.status;
+}
+
+function taskBadgeLabel(task: StepTask): string {
+  if (task.verdict) return task.verdict.replace("_", " ");
+  return task.status;
+}
+
+function confidenceBadgeClass(c: Confidence): string {
+  if (c === "high") return "done";
+  if (c === "medium") return "running";
+  return "blocked";
+}
+
+interface RunState {
+  id: string;
+  idea: string;
+  status: "running" | "completed" | "failed" | "stopped_no_go" | "held" | "cancelled";
+  created_at: string;
+  updated_at: string;
+  current_step_index: number;
+  total_steps: number;
+  steps: StepResult[];
+  error: string | null;
+  provider: "anthropic" | "groq" | "openrouter" | "gemini";
+  model: string;
+  key_source: "user_provided" | "server_env";
+  path: PathEntry[];
+  mode?: "assisted" | "simulation";
+  approvals?: ApprovalRequest[];
+}
+
+const PROVIDER_LABELS: Record<RunState["provider"], string> = {
+  anthropic: "Anthropic",
+  groq: "Groq Cloud",
+  openrouter: "OpenRouter",
+  gemini: "Google Gemini",
+};
+
+const STATUS_LABELS: Record<RunState["status"], string> = {
+  running: "Building…",
+  completed: "Build complete",
+  failed: "Build stopped",
+  stopped_no_go: "Stopped — No-Go decision",
+  held: "Paused at a stage gate",
+  cancelled: "Cancelled",
+};
+
+function groupByPhase(steps: StepResult[]): [string, StepResult[]][] {
+  const groups = new Map<string, StepResult[]>();
+  for (const s of steps) {
+    const list = groups.get(s.business_phase) ?? [];
+    list.push(s);
+    groups.set(s.business_phase, list);
+  }
+  return Array.from(groups.entries());
+}
+
+export default function RunPage() {
+  const params = useParams<{ id: string }>();
+  const [run, setRun] = useState<RunState | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [versionsByStep, setVersionsByStep] = useState<Record<string, ArtifactVersion[]>>({});
+  const [resumeKey, setResumeKey] = useState("");
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [approvalReason, setApprovalReason] = useState("");
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const pendingApprovalRef = useRef<{ approvalId: string; decision: "approve" | "reject" } | null>(
+    null,
+  );
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelledRef = useRef(false);
+
+  function poll() {
+    fetch(`/api/runs/${params.id}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (res.status === 404) {
+          if (!cancelledRef.current) setNotFound(true);
+          return;
+        }
+        const data: RunState = await res.json();
+        if (!cancelledRef.current) {
+          setRun(data);
+          if (data.status === "running") {
+            timerRef.current = setTimeout(poll, 2500);
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelledRef.current) {
+          timerRef.current = setTimeout(poll, 4000);
+        }
+      });
+  }
+
+  useEffect(() => {
+    cancelledRef.current = false;
+    poll();
+    return () => {
+      cancelledRef.current = true;
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id]);
+
+  async function loadVersions(flowStep: string) {
+    if (versionsByStep[flowStep]) return;
+    try {
+      const res = await fetch(`/api/runs/${params.id}/artifacts?flow_step=${flowStep}`, {
+        cache: "no-store",
+      });
+      const data = await res.json();
+      setVersionsByStep((prev) => ({ ...prev, [flowStep]: data.versions ?? [] }));
+    } catch {
+      // Best-effort - the step's current attempt is already shown either way.
+    }
+  }
+
+  // Shared by both the "held" Resume button and a failed step's Restart
+  // button. Always tries without a key first - the server checks its
+  // short-lived key cache (webapp/lib/keyCache.ts) and the env var before
+  // ever asking us for one, so most resumes within that cache window
+  // succeed on this first call and the modal never opens.
+  async function attemptResume(keyOverride?: string) {
+    setResuming(true);
+    setResumeError(null);
+    try {
+      const res = await fetch(`/api/runs/${params.id}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(keyOverride ? { apiKey: keyOverride } : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (typeof data.error === "string" && data.error.includes("No API key supplied")) {
+          setKeyModalOpen(true);
+        } else {
+          setResumeError(data.error ?? "Failed to resume run.");
+        }
+        return;
+      }
+      setKeyModalOpen(false);
+      setResumeKey("");
+      poll();
+    } catch {
+      setResumeError("Failed to resume run.");
+    } finally {
+      setResuming(false);
+    }
+  }
+
+  // Resolve a pending assisted-mode approval (Phase 1c). Approve advances past
+  // the gate; reject reworks it. Mirrors attemptResume's key handling: a missing
+  // key opens the same modal, which re-invokes this with the key supplied.
+  async function resolveApproval(
+    approvalId: string,
+    decision: "approve" | "reject",
+    keyOverride?: string,
+  ) {
+    setResolvingId(approvalId);
+    setResumeError(null);
+    try {
+      const res = await fetch(`/api/runs/${params.id}/approvals`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          approvalId,
+          decision,
+          reason: approvalReason.trim() || undefined,
+          ...(keyOverride ? { apiKey: keyOverride } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (typeof data.error === "string" && data.error.includes("No API key supplied")) {
+          pendingApprovalRef.current = { approvalId, decision };
+          setKeyModalOpen(true);
+        } else {
+          setResumeError(data.error ?? "Failed to resolve approval.");
+        }
+        return;
+      }
+      pendingApprovalRef.current = null;
+      setKeyModalOpen(false);
+      setResumeKey("");
+      setApprovalReason("");
+      poll();
+    } catch {
+      setResumeError("Failed to resolve approval.");
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await fetch(`/api/runs/${params.id}/cancel`, { method: "POST" });
+      poll();
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  if (notFound) {
+    return (
+      <main>
+        <a className="back-link" href="/">
+          ← New idea
+        </a>
+        <h1>Run not found</h1>
+      </main>
+    );
+  }
+
+  if (!run) {
+    return (
+      <main>
+        <a className="back-link" href="/">
+          ← New idea
+        </a>
+        <h1>Loading…</h1>
+      </main>
+    );
+  }
+
+  const doneCount = run.steps.filter((s) => s.status === "done").length;
+  const pct = Math.round((doneCount / run.total_steps) * 100);
+  const phases = groupByPhase(run.steps);
+  const lastPathEntry = run.path.length ? run.path[run.path.length - 1] : null;
+  const pendingApprovals = (run.approvals ?? []).filter((a) => a.status === "pending");
+
+  return (
+    <main>
+      <a className="back-link" href="/">
+        ← New idea
+      </a>
+      <h1>{STATUS_LABELS[run.status]}</h1>
+      <p className="subtitle">{run.idea}</p>
+      <p className="subtitle" style={{ marginTop: -20 }}>
+        {PROVIDER_LABELS[run.provider] ?? run.provider} · {run.model} ·{" "}
+        {run.key_source === "user_provided"
+          ? "using the key you provided"
+          : "using this server's configured key"}
+      </p>
+
+      <div className="progress-bar-track">
+        <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <p className="subtitle" style={{ marginTop: -14 }}>
+        {doneCount} / {run.total_steps} steps complete
+        {run.status === "running" && " — refreshing automatically"}
+      </p>
+
+      {(run.status === "running" || run.status === "held") && (
+        <button onClick={handleCancel} disabled={cancelling} style={{ marginBottom: 16 }}>
+          {cancelling ? "Cancelling…" : "Cancel run"}
+        </button>
+      )}
+
+      {run.error && <div className="top-error">{run.error}</div>}
+
+      {run.status === "stopped_no_go" && (
+        <div className="top-error">
+          The run reached a Go/No-Go gate and recorded a No-Go decision at step{" "}
+          {lastPathEntry?.flow_step}. {lastPathEntry?.reason}
+        </div>
+      )}
+
+      {run.status === "held" && pendingApprovals.length > 0 && (
+        <div className="top-error">
+          <div style={{ marginBottom: 10, fontWeight: 600 }}>
+            Awaiting your approval — {pendingApprovals.length} decision gate
+            {pendingApprovals.length > 1 ? "s" : ""} paused (assisted mode). The run does
+            not proceed until you decide.
+          </div>
+          {pendingApprovals.map((a) => (
+            <div
+              key={a.id}
+              style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}
+            >
+              <div style={{ marginBottom: 4 }}>
+                Step {a.flow_step} — {a.activity}{" "}
+                <span className="badge pending">Level {a.level}</span>
+              </div>
+              <div className="field-hint" style={{ marginBottom: 8 }}>
+                {a.summary}
+              </div>
+              <textarea
+                placeholder="Optional note / reason (shown on the decision)"
+                value={approvalReason}
+                onChange={(e) => setApprovalReason(e.target.value)}
+                style={{ width: "100%", minHeight: 48, marginBottom: 8, boxSizing: "border-box" }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => resolveApproval(a.id, "approve")} disabled={resolvingId === a.id}>
+                  {resolvingId === a.id ? "Working…" : "Approve & continue"}
+                </button>
+                <button onClick={() => resolveApproval(a.id, "reject")} disabled={resolvingId === a.id}>
+                  Reject & rework
+                </button>
+              </div>
+            </div>
+          ))}
+          {resumeError && <div className="step-reason">{resumeError}</div>}
+        </div>
+      )}
+
+      {run.status === "held" && pendingApprovals.length === 0 && (
+        <div className="top-error">
+          <div style={{ marginBottom: 8 }}>
+            Paused at step {lastPathEntry?.flow_step}: {lastPathEntry?.reason} Resumable —
+            picks up exactly where it left off.
+          </div>
+          <button onClick={() => attemptResume()} disabled={resuming}>
+            {resuming ? "Resuming…" : "Resume"}
+          </button>
+          {resumeError && <div className="step-reason">{resumeError}</div>}
+        </div>
+      )}
+
+      {keyModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--panel)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: 20,
+              width: 320,
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Enter API key</h3>
+            <p className="field-hint">
+              This run&apos;s key isn&apos;t in memory anymore (or was never supplied) -
+              paste it to continue.
+            </p>
+            <input
+              type="password"
+              placeholder="API key"
+              value={resumeKey}
+              onChange={(e) => setResumeKey(e.target.value)}
+              style={{ width: "100%", padding: "6px 8px", marginBottom: 10, boxSizing: "border-box" }}
+              autoFocus
+            />
+            {resumeError && <div className="step-reason">{resumeError}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => {
+                  setKeyModalOpen(false);
+                  setResumeError(null);
+                }}
+                disabled={resuming}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const pa = pendingApprovalRef.current;
+                  if (pa) resolveApproval(pa.approvalId, pa.decision, resumeKey);
+                  else attemptResume(resumeKey);
+                }}
+                disabled={resuming || resolvingId !== null || !resumeKey.trim()}
+              >
+                {resuming || resolvingId ? "Continuing…" : "Continue"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {run.path.some((p) => p.decision !== "advance") && (
+        <details className="step" style={{ marginBottom: 18 }}>
+          <summary>
+            <span className="step-activity">Execution path (non-linear events)</span>
+          </summary>
+          <div className="step-body">
+            {run.path
+              .filter((p) => p.decision !== "advance")
+              .map((p, idx) => (
+                <div key={idx} className="step-reason" style={{ color: "var(--text-dim)" }}>
+                  Step {p.flow_step} (attempt {p.attempt}) {GATE_ACTION_LABELS[p.decision]}
+                  {p.reason ? ` — ${p.reason}` : ""}
+                </div>
+              ))}
+          </div>
+        </details>
+      )}
+
+      {phases.map(([phase, steps]) => (
+        <div className="phase-group" key={phase}>
+          <div className="phase-title">{phase}</div>
+          {steps.map((s) => (
+            <details
+              className="step"
+              key={s.flow_step}
+              open={s.status === "blocked" || s.status === "error"}
+              onToggle={(e) => {
+                if ((e.target as HTMLDetailsElement).open && s.attempt > 1) {
+                  loadVersions(s.flow_step);
+                }
+              }}
+            >
+              <summary>
+                <span className="step-no">{s.flow_step}</span>
+                <span className="step-activity">{s.activity}</span>
+                <span className="step-agent">{s.agent_name}</span>
+                {s.is_gate && <span className="badge pending">gate</span>}
+                {s.attempt > 1 && <span className="badge running">attempt {s.attempt}</span>}
+                {s.meta && (
+                  <span className={`badge ${confidenceBadgeClass(s.meta.confidence)}`}>
+                    {s.meta.confidence} confidence
+                  </span>
+                )}
+                <span className={`badge ${s.status}`}>{s.status}</span>
+              </summary>
+              <div className="step-body">
+                <div className="step-agent">Output artifact: {s.output_artifact}</div>
+                {s.meta && (
+                  <div className="step-agent">
+                    Evidence quality: {s.meta.evidence_quality}
+                    {s.meta.decision ? ` · Decision: ${s.meta.decision}` : ""}
+                    {s.meta.claims.length > 0 && ` · ${s.meta.claims.length} tagged claim(s)`}
+                  </div>
+                )}
+                {s.meta && s.meta.validation_notes.length > 0 && (
+                  <div className="step-reason">
+                    {s.meta.validation_notes.map((n, i) => (
+                      <div key={i}>{n}</div>
+                    ))}
+                  </div>
+                )}
+                {s.gate_decision && s.gate_decision !== "advance" && (
+                  <div className="step-reason">
+                    Gate: {GATE_ACTION_LABELS[s.gate_decision]}
+                    {s.gate_reason ? ` — ${s.gate_reason}` : ""}
+                  </div>
+                )}
+                {s.reason && <div className="step-reason">{s.reason}</div>}
+                {(s.status === "blocked" || s.status === "error") && run.status === "failed" && (
+                  <div style={{ margin: "8px 0" }}>
+                    <button onClick={() => attemptResume()} disabled={resuming}>
+                      {resuming ? "Restarting…" : "Restart this step"}
+                    </button>
+                    {resumeError && <div className="step-reason">{resumeError}</div>}
+                  </div>
+                )}
+                {s.content && <pre>{s.content}</pre>}
+
+                {s.attempt > 1 && (
+                  <div className="task-list">
+                    <div className="task-list-title">
+                      Prior attempts ({(versionsByStep[s.flow_step]?.length ?? s.attempt) - 1})
+                    </div>
+                    {(versionsByStep[s.flow_step] ?? [])
+                      .filter((v) => v.attempt < s.attempt)
+                      .map((v) => (
+                        <details className="task" key={v.attempt}>
+                          <summary>
+                            <span className="task-role">Attempt {v.attempt}</span>
+                            <span className="task-agent">{v.agent_name}</span>
+                            <span className={`badge ${confidenceBadgeClass(v.meta.confidence)}`}>
+                              {v.meta.confidence}
+                            </span>
+                          </summary>
+                          <div className="task-body">
+                            {v.gate_decision && (
+                              <div className="step-reason">
+                                {GATE_ACTION_LABELS[v.gate_decision]}
+                                {v.gate_reason ? ` — ${v.gate_reason}` : ""}
+                              </div>
+                            )}
+                            <pre>{v.content}</pre>
+                          </div>
+                        </details>
+                      ))}
+                  </div>
+                )}
+
+                {s.tasks && s.tasks.length > 0 && (
+                  <div className="task-list">
+                    <div className="task-list-title">
+                      Creator → Critic → Contributor → Approver → Executor
+                    </div>
+                    {s.tasks.map((t, idx) => (
+                      <details className="task" key={`${t.role}-${t.agent_id}-${idx}`}>
+                        <summary>
+                          <span className="task-role">{ROLE_LABELS[t.role]}</span>
+                          <span className="task-agent">{t.agent_name}</span>
+                          {t.model && t.model !== run.model && (
+                            <span className="badge pending">{t.model}</span>
+                          )}
+                          <span className={`badge ${taskBadgeClass(t)}`}>
+                            {taskBadgeLabel(t)}
+                          </span>
+                        </summary>
+                        <div className="task-body">
+                          {t.reason && <div className="step-reason">{t.reason}</div>}
+                          {t.content && <pre>{t.content}</pre>}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </details>
+          ))}
+        </div>
+      ))}
+    </main>
+  );
+}
