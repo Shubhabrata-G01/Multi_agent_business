@@ -32,3 +32,11 @@ export async function listRuns(): Promise<RunState[]> {
 export async function listRunsByOwner(ownerId: string): Promise<RunState[]> {
   return backend().listRunsByOwner(ownerId);
 }
+
+/** Organization-scoped run lookup (STEP 4 item 3) - every member of an
+ * organization sees all of its runs, not just the ones they personally
+ * started; access control is by organization membership (see
+ * lib/authz.ts/lib/apiAuth.ts), not individual ownership. */
+export async function listRunsByOrganization(organizationId: string): Promise<RunState[]> {
+  return backend().listRunsByOrganization(organizationId);
+}

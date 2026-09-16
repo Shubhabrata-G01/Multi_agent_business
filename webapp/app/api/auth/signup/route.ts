@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { checkRateLimit, clientIp } from "@/lib/rateLimit";
+import { requireSameOrigin } from "@/lib/csrf";
+import { firstIssueMessage, signupSchema } from "@/lib/validation";
 
 export async function POST(request: Request) {
+  const originCheck = requireSameOrigin(request);
+  if (originCheck) return originCheck;
+
+  const rateLimited = checkRateLimit(clientIp(request), "signup");
+  if (rateLimited) return rateLimited;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -10,22 +19,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const obj = typeof body === "object" && body !== null
-    ? (body as Record<string, unknown>)
-    : {};
-  const email = typeof obj.email === "string" ? obj.email.trim().toLowerCase() : "";
-  const password = typeof obj.password === "string" ? obj.password : "";
-  const name = typeof obj.name === "string" ? obj.name.trim() : null;
-
-  if (!email || !email.includes("@")) {
-    return NextResponse.json({ error: "A valid email is required." }, { status: 400 });
+  const parsed = signupSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: firstIssueMessage(parsed.error) }, { status: 400 });
   }
-  if (password.length < 12) {
-    return NextResponse.json(
-      { error: "Password must be at least 12 characters." },
-      { status: 400 },
-    );
-  }
+  const { email, password, name } = parsed.data;
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {

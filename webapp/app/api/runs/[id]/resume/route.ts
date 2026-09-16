@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { resumeRun } from "@/lib/orchestrator";
-import { requireOwnedRun } from "@/lib/apiAuth";
+import { requireOrgRun } from "@/lib/apiAuth";
+import { canManageRun } from "@/lib/authz";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { requireSameOrigin } from "@/lib/csrf";
 
 /**
  * Resumes a "held" run (paused at a stage gate - see evaluateGate in
@@ -15,9 +18,15 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const originCheck = requireSameOrigin(request);
+  if (originCheck) return originCheck;
+
   const { id } = await params;
-  const authResult = await requireOwnedRun(id);
-  if (authResult.response) return authResult.response;
+  const authResult = await requireOrgRun(id, canManageRun);
+  if (authResult.response || !authResult.user) return authResult.response;
+
+  const rateLimited = checkRateLimit(`resume:${authResult.user.id}`, "resume");
+  if (rateLimited) return rateLimited;
 
   let body: unknown = {};
   try {

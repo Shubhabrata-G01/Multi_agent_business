@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { healIfStale } from "@/lib/orchestrator";
-import { requireOwnedRun } from "@/lib/apiAuth";
+import { requireOrgRun } from "@/lib/apiAuth";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const authResult = await requireOwnedRun(id);
+  const authResult = await requireOrgRun(id); // any org member may view
   if (authResult.response || !authResult.run) return authResult.response;
   const run = authResult.run;
   // Every poll of a running run is the moment a dead-but-still-"running"

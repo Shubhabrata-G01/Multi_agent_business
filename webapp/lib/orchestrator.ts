@@ -29,6 +29,8 @@ import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
 import { getStorageBackend } from "./storageBackend";
+import { getQuotaConfig } from "./quotas";
+import { getRunCostUsd, recordUsage } from "./usage";
 import type {
   ApprovalRequest,
   ArtifactMeta,
@@ -784,6 +786,25 @@ async function runTask(
     task.output_tokens = result.outputTokens;
     task.finished_at = new Date().toISOString();
 
+    // STEP 4 item 8: usage ledger. Awaited (no fire-and-forget writes - see
+    // STEP 2 item 5) but its own failure is logged, not propagated - a
+    // transient DB hiccup recording usage must never take down the run.
+    if (run.owner_id && run.organization_id) {
+      try {
+        await recordUsage({
+          runId: run.id,
+          userId: run.owner_id,
+          organizationId: run.organization_id,
+          provider,
+          model,
+          inputTokens: result.inputTokens ?? 0,
+          outputTokens: result.outputTokens ?? 0,
+        });
+      } catch (err) {
+        console.error(`[usage] failed to record usage for run ${run.id}:`, err);
+      }
+    }
+
     if (labelConfig.label === "ARTIFACT_META") {
       const { content, meta } = parseArtifactMeta(result.text);
       const validated = validateArtifactMeta(meta);
@@ -984,6 +1005,7 @@ export function evaluateGate(
 function initRun(
   id: string,
   ownerId: string,
+  organizationId: string,
   idea: string,
   provider: LLMProvider,
   model: string,
@@ -1041,6 +1063,7 @@ function initRun(
   return {
     id,
     owner_id: ownerId,
+    organization_id: organizationId,
     idea,
     status: "running",
     created_at: now,
@@ -1121,6 +1144,26 @@ export async function executeRun(
         attempt: 0,
         decision: "held",
         reason: `Run-wide token budget ceiling reached (${maxTotalTokens.toLocaleString()} tokens).`,
+        at: new Date().toISOString(),
+      });
+      run.updated_at = new Date().toISOString();
+      await saveRun(run);
+      return;
+    }
+
+    // STEP 4 item 7: hard budget check DURING execution (the request-time
+    // check is quotas.ts's assertCanStartRun, before the run even starts).
+    // A no-op on the filesystem backend (getRunCostUsd returns 0 there - no
+    // UsageEvent table to query - filesystem mode has no quota enforcement).
+    const maxRunCostUsd = getQuotaConfig().orgMaxRunCostUsd;
+    if ((await getRunCostUsd(id)) >= maxRunCostUsd) {
+      run.status = "held";
+      run.error = null;
+      run.path.push({
+        flow_step: run.steps[run.current_step_index]?.flow_step ?? "",
+        attempt: 0,
+        decision: "held",
+        reason: `Run cost ceiling reached ($${maxRunCostUsd.toLocaleString()}).`,
         at: new Date().toISOString(),
       });
       run.updated_at = new Date().toISOString();
@@ -1657,6 +1700,7 @@ export async function startRun(
   mode: ExecutionMode = "assisted",
   profile: BusinessProfile | undefined = undefined,
   ownerId = "legacy-owner",
+  organizationId = "legacy-org",
 ): Promise<string> {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
@@ -1680,7 +1724,7 @@ export async function startRun(
     );
   }
 
-  const run = initRun(id, ownerId, idea, provider, model, source, mode, roadmap, profile);
+  const run = initRun(id, ownerId, organizationId, idea, provider, model, source, mode, roadmap, profile);
   // Awaited: the caller (POST /api/runs) must not report a run as created
   // until its initial state is actually durable.
   await saveRun(run);
@@ -1778,12 +1822,19 @@ export async function resumeRun(id: string, suppliedApiKey: string | undefined):
  * cache -> env), and a missing key surfaces the same "No API key supplied"
  * error so the UI can prompt.
  */
+export interface Approver {
+  id: string;
+  email: string;
+  role: string;
+}
+
 export async function decideApproval(
   id: string,
   approvalId: string,
   decision: "approve" | "reject",
   reason: string | undefined,
   suppliedApiKey: string | undefined,
+  approver: Approver,
 ): Promise<void> {
   const run = await loadRun(id);
   if (!run) {
@@ -1798,7 +1849,13 @@ export async function decideApproval(
   }
 
   const now = new Date().toISOString();
-  approval.decided_by = "founder";
+  // STEP 4 item 4: the authenticated reviewer's real identity, never a
+  // hardcoded placeholder - decided_by is the human-readable audit trail
+  // value (shown in the UI), decided_by_user_id/decided_by_role the
+  // underlying record.
+  approval.decided_by = approver.email;
+  approval.decided_by_user_id = approver.id;
+  approval.decided_by_role = approver.role;
   approval.decided_at = now;
   approval.reason = reason;
 

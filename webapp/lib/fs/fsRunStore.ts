@@ -66,6 +66,10 @@ export async function listRunsByOwner(ownerId: string): Promise<RunState[]> {
   return (await listRuns()).filter((r) => r.owner_id === ownerId);
 }
 
+export async function listRunsByOrganization(organizationId: string): Promise<RunState[]> {
+  return (await listRuns()).filter((r) => r.organization_id === organizationId);
+}
+
 /** Test-only: clears the in-memory cache so tests reading/writing the same
  * run id in the same process see disk state rather than a stale cache hit. */
 export function resetFsRunCacheForTests(): void {

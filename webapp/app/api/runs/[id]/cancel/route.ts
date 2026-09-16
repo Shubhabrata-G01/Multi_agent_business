@@ -1,18 +1,25 @@
 import { NextResponse } from "next/server";
 import { cancelRun } from "@/lib/orchestrator";
-import { requireOwnedRun } from "@/lib/apiAuth";
+import { requireOrgRun } from "@/lib/apiAuth";
+import { canManageRun } from "@/lib/authz";
+import { requireSameOrigin } from "@/lib/csrf";
 
 /**
  * Cancels a running or held run. The orchestrator's loop checks run status
  * every iteration (the same mechanism "held" already relies on), so this
  * takes effect within one iteration rather than killing anything mid-call.
+ * Requires a role that can manage runs (OWNER/ADMIN/MEMBER) - a REVIEWER
+ * gets 403.
  */
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const originCheck = requireSameOrigin(request);
+  if (originCheck) return originCheck;
+
   const { id } = await params;
-  const authResult = await requireOwnedRun(id);
+  const authResult = await requireOrgRun(id, canManageRun);
   if (authResult.response) return authResult.response;
 
   try {

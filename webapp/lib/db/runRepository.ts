@@ -65,6 +65,7 @@ async function insert(run: RunState): Promise<void> {
       data: {
         id: run.id,
         owner_id: run.owner_id ?? "",
+        organization_id: run.organization_id ?? "",
         status: run.status,
         created_at: new Date(run.created_at),
         updated_at: new Date(run.updated_at),
@@ -112,6 +113,7 @@ export async function saveRun(run: RunState): Promise<void> {
       where: { id: run.id, version: expected },
       data: {
         owner_id: run.owner_id ?? "",
+        organization_id: run.organization_id ?? "",
         status: run.status,
         updated_at: new Date(run.updated_at),
         data: run as unknown as Prisma.InputJsonValue,
@@ -137,6 +139,21 @@ export async function listRuns(): Promise<RunState[]> {
 export async function listRunsByOwner(ownerId: string): Promise<RunState[]> {
   const rows = await prisma.run.findMany({
     where: { owner_id: ownerId },
+    orderBy: { created_at: "desc" },
+  });
+  return rows.map((row) => {
+    const run = rowToRun(row);
+    versionOf.set(run, row.version);
+    return run;
+  });
+}
+
+/** Every run belonging to an organization (STEP 4 item 3) - the run-list
+ * endpoint scopes by this rather than listRunsByOwner, so any member of the
+ * org sees all its runs, not just the ones they personally started. */
+export async function listRunsByOrganization(organizationId: string): Promise<RunState[]> {
+  const rows = await prisma.run.findMany({
+    where: { organization_id: organizationId },
     orderBy: { created_at: "desc" },
   });
   return rows.map((row) => {

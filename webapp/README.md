@@ -152,6 +152,54 @@ enqueue into - runs execute in-process instead, exactly as before (see
 This is fine for local development; filesystem mode has no durability
 guarantees regardless of whether a worker is involved.
 
+### Organizations, roles, and access control
+
+Every account gets a personal Organization (workspace) at signup with role
+`OWNER`; a run belongs to an organization (`Run.organization_id`), not to the
+individual who clicked "start" - any member of that organization can see and
+act on its runs, per their role (`lib/authz.ts`):
+
+| Role | View runs | Create/cancel/resume | Approve/reject gates |
+|---|---|---|---|
+| OWNER / ADMIN | ✓ | ✓ | ✓ |
+| MEMBER | ✓ | ✓ | ✗ |
+| REVIEWER | ✓ | ✗ | ✓ |
+
+`lib/apiAuth.ts`'s `requireOrgRun(id, capability?)` is the single check every
+run-scoped API route goes through: a run in an organization the caller isn't
+a member of returns 404 (not 403 - a non-member can't tell "doesn't exist"
+from "isn't theirs"); a member whose role fails the capability check gets
+403. A human-approval decision now always records the real authenticated
+reviewer's id/email/role (`ApprovalRequest.decided_by*`), never a hardcoded
+placeholder.
+
+### Rate limits, quotas, and other hardening
+
+- **Rate limits** (`lib/rateLimit.ts`, in-memory - see its own comment for
+  the multi-instance caveat): signup and login are limited per email/IP;
+  classify, run creation, resume, and approval decisions are limited per
+  user.
+- **Quotas** (`lib/quotas.ts`, PostgreSQL-only): per-organization and
+  per-user concurrent-run and daily-run ceilings, checked before a run
+  starts; a per-organization monthly token budget and a per-run cost ceiling
+  (`lib/pricing.ts` estimates cost from token counts), the latter checked
+  both before a run starts and continuously during execution
+  (`orchestrator.ts`'s `executeRun` loop). Every provider call is logged to
+  `UsageEvent` (provider/model/tokens/estimated cost/run/user/org).
+- **CSRF/origin protection** (`lib/csrf.ts`): every state-changing route
+  requires the request's `Origin` to match its own `Host`.
+- **Security headers and cookies**: `next.config.mjs` sets
+  `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, HSTS, and a CSP (`script-src`/`style-src` allow
+  `'unsafe-inline'` - Next's App Router streams inline hydration scripts
+  with no nonce by default, so a stricter `script-src 'self'` alone blanks
+  every page; a nonce-based CSP is a follow-up, not implemented here). Session
+  cookies are `httpOnly`, `sameSite=lax`, and `secure`/`__Secure-`-prefixed in
+  production (`auth.ts`).
+- BYOK keys are encrypted at rest only for the bounded window a durable job
+  needs them (see "Durable execution" above); never logged, never returned in
+  any API response.
+
 ## How it works
 
 - `lib/businessFlow.ts` reads `../company/agents/registry.json` and

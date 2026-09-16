@@ -36,12 +36,17 @@ model Membership {
 }
 
 model Run {
-  id         String   @id
-  owner_id   String
-  status     String
-  created_at DateTime
-  updated_at DateTime
-  data       Json
+  id     String @id
+  // The user who created the run (attribution/audit) - access control is by
+  // organization_id below, not owner_id, so any member of the run's
+  // organization can see/manage it per their role (STEP 4 item 3), not just
+  // whoever clicked "start".
+  owner_id        String
+  organization_id String
+  status          String
+  created_at      DateTime
+  updated_at      DateTime
+  data            Json
   // Optimistic-concurrency token (see lib/db/runRepository.ts). Incremented on
   // every successful update; a write whose expected version doesn't match the
   // current row is rejected rather than silently overwriting a newer write.
@@ -49,6 +54,7 @@ model Run {
   artifacts  ArtifactVersion[]
 
   @@index([owner_id, created_at])
+  @@index([organization_id, created_at])
   @@index([status])
 }
 
@@ -85,8 +91,8 @@ enum OrganizationRole {
 // run; startRun/resumeRun upsert it and the standalone worker process
 // (`npm run worker`, lib/worker/run.ts) claims/executes it. Replaces the
 // in-process fire-and-forget queue (lib/jobQueue.ts, still used only as the
-// local filesystem-mode dev fallback - see lib/jobs/dispatch.ts) for the
-// PostgreSQL backend.
+// local filesystem-mode dev fallback - see orchestrator.ts's
+// dispatchExecution) for the PostgreSQL backend.
 model Job {
   id     String @id @default(cuid())
   run_id String @unique
@@ -118,4 +124,26 @@ model Job {
   updated_at DateTime @updatedAt
 
   @@index([status, available_at])
+}
+
+// One row per provider call (STEP 4 item 8) - written by lib/usage.ts right
+// after each StepTask completes (orchestrator.ts's runTask). Backs quota
+// enforcement (concurrent/daily run counts come from Run; monthly token
+// budget and max-run-cost come from summing this table - see lib/quotas.ts)
+// and is the raw ledger an org/billing view would read from later.
+model UsageEvent {
+  id                 String   @id @default(cuid())
+  run_id             String
+  user_id            String
+  organization_id    String
+  provider           String
+  model              String
+  input_tokens       Int
+  output_tokens      Int
+  estimated_cost_usd Float
+  created_at         DateTime @default(now())
+
+  @@index([organization_id, created_at])
+  @@index([user_id, created_at])
+  @@index([run_id])
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAssumptionRegister, getDecisionLog } from "@/lib/artifactStore";
-import { requireOwnedRun } from "@/lib/apiAuth";
+import { requireOrgRun } from "@/lib/apiAuth";
 
 // Derived views over the artifact store's claims, shaped to match
 // company/governance/assumption-register-template.md and
@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string; kind: string }> },
 ) {
   const { id, kind } = await params;
-  const authResult = await requireOwnedRun(id);
+  const authResult = await requireOrgRun(id); // any org member may view
   if (authResult.response) return authResult.response;
 
   if (kind === "assumptions") {

@@ -280,7 +280,13 @@ export interface ApprovalRequest {
   summary: string; // why approval is needed
   status: "pending" | "approved" | "rejected";
   created_at: string;
-  decided_by?: string; // "founder" (the human) or an authorized approver
+  // The authenticated approver's identity (STEP 4 item 4 - never a
+  // hardcoded placeholder like "founder"). decided_by is their email
+  // (human-readable, shown in the UI/audit trail); decided_by_user_id and
+  // decided_by_role are the underlying record.
+  decided_by?: string;
+  decided_by_user_id?: string;
+  decided_by_role?: string;
   decided_at?: string;
   reason?: string; // decision note (esp. on reject)
 }
@@ -288,6 +294,11 @@ export interface ApprovalRequest {
 export interface RunState {
   id: string;
   owner_id?: string;
+  // The organization (workspace) this run belongs to - access control scopes
+  // by this, not owner_id, so any member of the org can see/manage the run
+  // per their role (STEP 4 item 3). Optional only because a run created
+  // before this field existed has none on disk.
+  organization_id?: string;
   idea: string;
   status: RunStatus;
   created_at: string;

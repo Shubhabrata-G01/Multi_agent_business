@@ -162,7 +162,11 @@ describeIfDb("orchestrator <-> durable job queue integration", () => {
       },
     });
 
-    await decideApproval(id, approvalId, "approve", "looks good", "sk-ant-fake-key-3");
+    await decideApproval(id, approvalId, "approve", "looks good", "sk-ant-fake-key-3", {
+      id: "reviewer-1",
+      email: "reviewer@example.com",
+      role: "OWNER",
+    });
 
     const job = await prisma.job.findUniqueOrThrow({ where: { run_id: id } });
     expect(job.status).toBe("queued");
