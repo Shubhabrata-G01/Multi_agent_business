@@ -16,7 +16,7 @@ export async function POST(
   if (authResult.response) return authResult.response;
 
   try {
-    cancelRun(id);
+    await cancelRun(id);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("not found")

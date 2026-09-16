@@ -16,7 +16,7 @@ export async function requireUser() {
 export async function requireOwnedRun(id: string) {
   const result = await requireUser();
   if (result.response || !result.user) return result;
-  const run = loadRun(id);
+  const run = await loadRun(id);
   if (!run) {
     return {
       user: null,

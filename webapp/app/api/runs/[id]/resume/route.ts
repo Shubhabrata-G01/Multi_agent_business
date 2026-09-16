@@ -30,7 +30,7 @@ export async function POST(
     typeof obj.apiKey === "string" && obj.apiKey.trim() ? obj.apiKey.trim() : undefined;
 
   try {
-    resumeRun(id, apiKey);
+    await resumeRun(id, apiKey);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("not found")

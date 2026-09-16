@@ -14,10 +14,10 @@ export async function GET(
   if (authResult.response) return authResult.response;
 
   if (kind === "assumptions") {
-    return NextResponse.json({ assumptions: getAssumptionRegister(id) });
+    return NextResponse.json({ assumptions: await getAssumptionRegister(id) });
   }
   if (kind === "decisions") {
-    return NextResponse.json({ decisions: getDecisionLog(id) });
+    return NextResponse.json({ decisions: await getDecisionLog(id) });
   }
   return NextResponse.json(
     { error: `Unknown governance view '${kind}'. Use 'assumptions' or 'decisions'.` },

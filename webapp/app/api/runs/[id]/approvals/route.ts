@@ -42,7 +42,7 @@ export async function POST(
     typeof obj.apiKey === "string" && obj.apiKey.trim() ? obj.apiKey.trim() : undefined;
 
   try {
-    decideApproval(id, approvalId, decision, reason, apiKey);
+    await decideApproval(id, approvalId, decision, reason, apiKey);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("not found")

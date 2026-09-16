@@ -73,6 +73,35 @@ run `npm run db:generate`, apply the checked-in Prisma migrations with
 `npm run db:migrate`, then create an account at `/signup`. Run and artifact
 endpoints require an authenticated user and only return that user's runs.
 
+### Storage backend (PostgreSQL vs. filesystem)
+
+Runs and artifacts are persisted through `lib/runStore.ts`/`lib/artifactStore.ts`,
+which dispatch to one of two backends (`lib/storageBackend.ts`):
+
+| | PostgreSQL (`lib/db/`) | Filesystem (`lib/fs/`) |
+|---|---|---|
+| When used | **Default** whenever `DATABASE_URL` is set | Only with an explicit `STORAGE_BACKEND=filesystem`, or when neither is set (dev only) |
+| Production | Required - the app refuses to start (or start a run) without `DATABASE_URL` | **Refused outright** - `STORAGE_BACKEND=filesystem` throws at startup if `NODE_ENV=production` |
+| Durability | Survives process restarts, works across multiple instances | A single process's local disk only - not durable, not shared |
+| Concurrency safety | Optimistic-concurrency (`version` column) rejects a write based on stale data rather than silently losing it | **None** - a later save silently overwrites an earlier one |
+
+**Filesystem mode is a local-development convenience only.** It is what runs
+if you skip `DATABASE_URL` entirely for a quick `npm run dev` - useful for
+poking at the orchestrator without standing up Postgres, but never appropriate
+for anything with more than one user or process.
+
+To run a local PostgreSQL for development (Docker):
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+# DATABASE_URL=postgresql://devuser:devpass@localhost:55432/webapp_dev in .env.local
+npm run db:generate
+npm run db:migrate
+```
+
+The active backend is logged on server startup (`instrumentation.ts`) and on
+first use (`[storage] Using the ... backend`).
+
 ## How it works
 
 - `lib/businessFlow.ts` reads `../company/agents/registry.json` and
@@ -96,14 +125,20 @@ endpoints require an authenticated user and only return that user's runs.
   combination of retries/jumps can hang a run.
 - `lib/providers/index.ts` dispatches to the right provider implementation
   and resolves which API key to use (`resolveApiKey`).
-- Runs are persisted to `runs/<id>.json` (gitignored); the UI polls
-  `GET /api/runs/[id]` every ~2.5s. A run's full state (program counter,
-  attempts, jump counts) lives in that file, so a **held** or **failed** run
-  can be resumed from exactly the step it stopped on. Note the runner is an
-  in-process fire-and-forget loop, so a server restart mid-step can orphan a
-  `running` run — `healIfStale` detects this on the next read and flips it to
-  `failed` so it can be resumed (a durable queue is the planned fix; see
-  `../company/architecture/12-business-os-evolution.md`).
+- Runs are persisted through `lib/runStore.ts` - PostgreSQL by default (see
+  "Storage backend" above), a `runs/<id>.json` file (gitignored) only in
+  explicit filesystem-fallback mode. Every read/write is `await`ed; the UI
+  polls `GET /api/runs/[id]` every ~2.5s. A run's full state (program
+  counter, attempts, jump counts) lives in the persisted record, so a
+  **held** or **failed** run can be resumed from exactly the step it stopped
+  on. The PostgreSQL backend rejects a write based on stale data
+  (optimistic concurrency - see `lib/db/runRepository.ts`) rather than
+  silently losing a concurrent update (e.g. a `cancel` racing the run loop).
+  Note the execution loop itself is still an in-process background task (see
+  `lib/jobQueue.ts`), so a server restart mid-step can orphan a `running` run
+  — `healIfStale` detects this on the next read and flips it to `failed` so
+  it can be resumed (a durable worker queue that survives a restart is the
+  planned fix; see `../company/architecture/12-business-os-evolution.md`).
 - A Creator that reports `status: blocked` in its artifact-meta halts the run
   rather than continuing on a broken chain — downstream steps depend on
   upstream artifacts, so silently skipping one would corrupt everything after

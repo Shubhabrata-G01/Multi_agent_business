@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/apiAuth";
 import { healIfStale, startRun } from "@/lib/orchestrator";
-import { listRuns } from "@/lib/runStore";
+import { listRunsByOwner } from "@/lib/runStore";
 import {
   isValidProvider,
   PROVIDER_DEFAULT_MODEL,
@@ -10,22 +10,21 @@ import {
 
 export async function GET() {
   const authResult = await requireUser();
-  if (authResult.response) return authResult.response;
-  const runs = listRuns()
-    .filter((r) => r.owner_id === authResult.user?.id)
-    .map((r) => healIfStale(r))
-    .map((r) => ({
-      id: r.id,
-      idea: r.idea,
-      status: r.status,
-      created_at: r.created_at,
-      updated_at: r.updated_at,
-      current_step_index: r.current_step_index,
-      total_steps: r.total_steps,
-      provider: r.provider,
-      model: r.model,
-      mode: r.mode ?? "simulation",
-    }));
+  if (authResult.response || !authResult.user) return authResult.response;
+  const owned = await listRunsByOwner(authResult.user.id);
+  const healed = await Promise.all(owned.map((r) => healIfStale(r)));
+  const runs = healed.map((r) => ({
+    id: r.id,
+    idea: r.idea,
+    status: r.status,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+    current_step_index: r.current_step_index,
+    total_steps: r.total_steps,
+    provider: r.provider,
+    model: r.model,
+    mode: r.mode ?? "simulation",
+  }));
   return NextResponse.json({ runs });
 }
 
@@ -85,7 +84,7 @@ export async function POST(request: Request) {
 
   let id: string;
   try {
-    id = startRun(idea, provider, model, apiKey, rawMode, profile, authResult.user.id);
+    id = await startRun(idea, provider, model, apiKey, rawMode, profile, authResult.user.id);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing key on both the request and the server env is the caller's

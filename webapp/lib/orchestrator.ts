@@ -187,7 +187,7 @@ function lastActivityAt(run: RunState): number {
  * back up from exactly the step it was frozen on, same as any other
  * error-status resume.
  */
-export function healIfStale(run: RunState): RunState {
+export async function healIfStale(run: RunState): Promise<RunState> {
   if (run.status !== "running") return run;
   const idleMs = Date.now() - lastActivityAt(run);
   if (idleMs < STALE_RUN_MS) return run;
@@ -210,7 +210,7 @@ export function healIfStale(run: RunState): RunState {
     ? `Step ${stuckStep.flow_step} (${stuckStep.activity}): ${reason}`
     : reason;
   run.updated_at = new Date().toISOString();
-  saveRun(run);
+  await saveRun(run);
   return run;
 }
 
@@ -765,7 +765,7 @@ async function runTask(
 ): Promise<StepTask> {
   const task = newTask(role, agent, model);
   run.steps[stepIndex].tasks.push(task);
-  saveRun(run);
+  await saveRun(run);
 
   try {
     const result = await runProviderTurn(provider, {
@@ -810,11 +810,11 @@ async function runTask(
     task.status = "error";
     task.reason = err instanceof Error ? err.message : String(err);
     task.finished_at = new Date().toISOString();
-    saveRun(run);
+    await saveRun(run);
     throw new Error(`${role} task (${agent.id}) failed: ${task.reason}`);
   }
 
-  saveRun(run);
+  await saveRun(run);
   return task;
 }
 
@@ -1076,7 +1076,7 @@ async function executeRun(
   // The steps a run walks come from its own roadmap (Phase 0b). Legacy runs
   // created before the config field existed have no roadmap on disk, so they
   // fall back to the global 81-step flow - exactly their original behavior.
-  const initial = loadRun(id);
+  const initial = await loadRun(id);
   const roadmap = initial?.config?.roadmap;
   const flowSteps: FlowStepDef[] = roadmap
     ? roadmap.nodes.slice(0, MAX_RUN_STEPS)
@@ -1084,7 +1084,7 @@ async function executeRun(
   const flowIndexByStep = new Map(flowSteps.map((s, idx) => [s.flow_step, idx]));
 
   for (;;) {
-    const run = loadRun(id);
+    const run = await loadRun(id);
     if (!run) return; // deleted mid-run; nothing to do
     if (run.status !== "running") return;
     if (run.current_step_index >= flowSteps.length) break;
@@ -1098,7 +1098,7 @@ async function executeRun(
       run.status = "held";
       run.error = null;
       run.updated_at = new Date().toISOString();
-      saveRun(run);
+      await saveRun(run);
       return;
     }
 
@@ -1113,7 +1113,7 @@ async function executeRun(
         at: new Date().toISOString(),
       });
       run.updated_at = new Date().toISOString();
-      saveRun(run);
+      await saveRun(run);
       return;
     }
 
@@ -1132,7 +1132,7 @@ async function executeRun(
     stepResult.gate_reason = null;
     stepResult.started_at = new Date().toISOString();
     run.updated_at = stepResult.started_at;
-    saveRun(run);
+    await saveRun(run);
 
     try {
       const creatorAgent = getAgentById(stepResult.agent_id);
@@ -1154,7 +1154,7 @@ async function executeRun(
       if (mode === "assisted" && gate && pendingApprovalFor(run.approvals, stepDef.flow_step, attemptNumber)) {
         run.status = "held";
         run.updated_at = new Date().toISOString();
-        saveRun(run);
+        await saveRun(run);
         return;
       }
 
@@ -1205,7 +1205,7 @@ async function executeRun(
         run.status = "failed";
         run.error = `Blocked at step ${stepResult.flow_step} (${stepResult.activity}): ${stepResult.reason}`;
         run.updated_at = stepResult.finished_at;
-        saveRun(run);
+        await saveRun(run);
         return;
       }
 
@@ -1469,7 +1469,7 @@ async function executeRun(
       stepResult.status = "done";
       stepResult.finished_at = new Date().toISOString();
 
-      saveArtifactVersion({
+      await saveArtifactVersion({
         run_id: id,
         flow_step: stepDef.flow_step,
         output_artifact: stepDef.output_artifact,
@@ -1522,7 +1522,7 @@ async function executeRun(
         run.approvals = [...(run.approvals ?? []), approval];
         stepResult.gate_decision = "held";
         stepResult.gate_reason = "Awaiting human approval (assisted mode).";
-        recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
+        await recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
         run.path.push({
           flow_step: stepDef.flow_step,
           attempt: attemptNumber,
@@ -1532,13 +1532,13 @@ async function executeRun(
         });
         run.status = "held";
         run.updated_at = new Date().toISOString();
-        saveRun(run);
+        await saveRun(run);
         return;
       }
 
       stepResult.gate_decision = gateResult.action;
       stepResult.gate_reason = gateResult.reason;
-      recordGateDecision(id, stepDef.flow_step, attemptNumber, gateResult.action, gateResult.reason);
+      await recordGateDecision(id, stepDef.flow_step, attemptNumber, gateResult.action, gateResult.reason);
 
       run.path.push({
         flow_step: stepDef.flow_step,
@@ -1552,27 +1552,27 @@ async function executeRun(
       switch (gateResult.action) {
         case "no_go_exit":
           run.status = "stopped_no_go";
-          saveRun(run);
+          await saveRun(run);
           return;
         case "held":
           run.status = "held";
-          saveRun(run);
+          await saveRun(run);
           return;
         case "retry_step":
           run.step_attempts[stepDef.flow_step] = priorAttempts + 1;
-          saveRun(run);
+          await saveRun(run);
           continue;
         case "return_to_step": {
           const target = gateResult.target as string;
           run.jump_counts[target] = (run.jump_counts[target] ?? 0) + 1;
           run.current_step_index = flowIndexByStep.get(target) ?? pc;
-          saveRun(run);
+          await saveRun(run);
           continue;
         }
         case "advance":
         default:
           run.current_step_index = pc + 1;
-          saveRun(run);
+          await saveRun(run);
           continue;
       }
     } catch (err) {
@@ -1583,16 +1583,16 @@ async function executeRun(
       run.status = "failed";
       run.error = `Error at step ${stepResult.flow_step} (${stepResult.activity}): ${message}`;
       run.updated_at = stepResult.finished_at;
-      saveRun(run);
+      await saveRun(run);
       return;
     }
   }
 
-  const finalRun = loadRun(id);
+  const finalRun = await loadRun(id);
   if (finalRun && finalRun.status === "running") {
     finalRun.status = "completed";
     finalRun.updated_at = new Date().toISOString();
-    saveRun(finalRun);
+    await saveRun(finalRun);
   }
 }
 
@@ -1608,7 +1608,7 @@ async function executeRun(
  * that gets persisted to runs/<id>.json, so it never touches disk or the
  * GET /api/runs/[id] response.
  */
-export function startRun(
+export async function startRun(
   idea: string,
   provider: LLMProvider,
   model: string,
@@ -1616,7 +1616,7 @@ export function startRun(
   mode: ExecutionMode = "assisted",
   profile: BusinessProfile | undefined = undefined,
   ownerId = "legacy-owner",
-): string {
+): Promise<string> {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
   const id = crypto.randomUUID();
@@ -1640,26 +1640,44 @@ export function startRun(
   }
 
   const run = initRun(id, ownerId, idea, provider, model, source, mode, roadmap, profile);
-  saveRun(run);
+  // Awaited: the caller (POST /api/runs) must not report a run as created
+  // until its initial state is actually durable.
+  await saveRun(run);
   if (source === "user_provided") {
     cacheApiKey(id, apiKey);
   }
 
-  enqueueRun(id, () =>
-    executeRun(id, provider, model, apiKey).catch((err) => {
-      const run2 = loadRun(id);
-      if (run2) {
-        run2.status = "failed";
-        run2.error =
-          "Unexpected orchestrator error: " +
-          (err instanceof Error ? err.message : String(err));
-        run2.updated_at = new Date().toISOString();
-        saveRun(run2);
-      }
-    }),
-  );
+  enqueueRun(id, () => executeRun(id, provider, model, apiKey).catch((err) => failRunOnUncaughtError(id, err)));
 
   return id;
+}
+
+/**
+ * Shared uncaught-error handler for the background executeRun loop (STEP 2
+ * item 5: every persistence operation is awaited, and an error must
+ * transition the run to a visible failed state - never swallowed). Only
+ * overwrites status when the run is still "running": if it's already
+ * "cancelled"/"held"/"stopped_no_go"/etc., a concurrent operation (cancelRun,
+ * decideApproval) already gave it a legitimate terminal/paused state and that
+ * must not be clobbered by an error that raced it (e.g. a save that lost an
+ * optimistic-concurrency conflict to that very operation).
+ */
+async function failRunOnUncaughtError(id: string, err: unknown): Promise<void> {
+  const message = "Unexpected orchestrator error: " + (err instanceof Error ? err.message : String(err));
+  try {
+    const run2 = await loadRun(id);
+    if (run2 && run2.status === "running") {
+      run2.status = "failed";
+      run2.error = message;
+      run2.updated_at = new Date().toISOString();
+      await saveRun(run2);
+    }
+  } catch (persistErr) {
+    // Persisting the failure itself failed (e.g. the DB is unreachable) -
+    // there is nowhere left to record this; surface it on the server log so
+    // it isn't silently lost.
+    console.error(`[orchestrator] failed to record run ${id} failure (${message}):`, persistErr);
+  }
 }
 
 /**
@@ -1675,8 +1693,8 @@ export function startRun(
  * first, then falls back to the server env var, and only errors (prompting
  * the UI to ask for one) if neither is available.
  */
-export function resumeRun(id: string, suppliedApiKey: string | undefined): void {
-  let run = loadRun(id);
+export async function resumeRun(id: string, suppliedApiKey: string | undefined): Promise<void> {
+  let run = await loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
@@ -1684,7 +1702,7 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
   // /api/runs/[id] first (that route's own healIfStale call is what usually
   // catches this) - so check here too, otherwise a genuinely orphaned
   // "running" run would just throw "cannot be resumed" forever.
-  run = healIfStale(run);
+  run = await healIfStale(run);
   if (run.status !== "held" && run.status !== "failed") {
     throw new Error(`Run cannot be resumed (current status: ${run.status})`);
   }
@@ -1705,20 +1723,10 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
   run.key_source = source;
   run.error = null;
   run.updated_at = new Date().toISOString();
-  saveRun(run);
+  await saveRun(run);
 
   enqueueRun(id, () =>
-    executeRun(id, run.provider, run.model, apiKey).catch((err) => {
-      const run2 = loadRun(id);
-      if (run2) {
-        run2.status = "failed";
-        run2.error =
-          "Unexpected orchestrator error: " +
-          (err instanceof Error ? err.message : String(err));
-        run2.updated_at = new Date().toISOString();
-        saveRun(run2);
-      }
-    }),
+    executeRun(id, run.provider, run.model, apiKey).catch((err) => failRunOnUncaughtError(id, err)),
   );
 }
 
@@ -1731,14 +1739,14 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
  * cache -> env), and a missing key surfaces the same "No API key supplied"
  * error so the UI can prompt.
  */
-export function decideApproval(
+export async function decideApproval(
   id: string,
   approvalId: string,
   decision: "approve" | "reject",
   reason: string | undefined,
   suppliedApiKey: string | undefined,
-): void {
-  const run = loadRun(id);
+): Promise<void> {
+  const run = await loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
@@ -1793,11 +1801,11 @@ export function decideApproval(
     if (stepIndex >= 0) run.current_step_index = stepIndex;
   }
   run.updated_at = now;
-  saveRun(run);
+  await saveRun(run);
 
   // No pending approval remains for this step now, so the generic resume path is
   // valid again and picks up from the (advanced or reset) program counter.
-  resumeRun(id, suppliedApiKey);
+  await resumeRun(id, suppliedApiKey);
 }
 
 /**
@@ -1807,8 +1815,8 @@ export function decideApproval(
  * the in-flight loop (if any) returns on its own within one iteration
  * boundary rather than being killed mid-call.
  */
-export function cancelRun(id: string): void {
-  const run = loadRun(id);
+export async function cancelRun(id: string): Promise<void> {
+  const run = await loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
@@ -1817,5 +1825,5 @@ export function cancelRun(id: string): void {
   }
   run.status = "cancelled";
   run.updated_at = new Date().toISOString();
-  saveRun(run);
+  await saveRun(run);
 }

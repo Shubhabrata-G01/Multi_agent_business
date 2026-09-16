@@ -42,24 +42,36 @@ model Run {
   created_at DateTime
   updated_at DateTime
   data       Json
+  // Optimistic-concurrency token (see lib/db/runRepository.ts). Incremented on
+  // every successful update; a write whose expected version doesn't match the
+  // current row is rejected rather than silently overwriting a newer write.
+  version    Int      @default(1)
   artifacts  ArtifactVersion[]
 
   @@index([owner_id, created_at])
+  @@index([status])
 }
 
 model ArtifactVersion {
-  id            String   @id @default(cuid())
-  run_id        String
-  flow_step     String
-  attempt       Int
-  created_at    DateTime
-  gate_decision String?
-  gate_reason   String?
-  data          Json
-  run           Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
+  id               String   @id @default(cuid())
+  run_id           String
+  flow_step        String
+  attempt          Int
+  created_at       DateTime
+  gate_decision    String?
+  gate_reason      String?
+  // Normalized out of `data` for indexed lookups (lib/db/artifactRepository.ts's
+  // queryArtifacts) without needing a JSONB query for the common filters.
+  agent_id         String   @default("")
+  confidence       String?
+  evidence_quality String?
+  data             Json
+  run              Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
 
   @@unique([run_id, flow_step, attempt])
   @@index([run_id, flow_step, attempt])
+  @@index([run_id, agent_id])
+  @@index([run_id, confidence])
 }
 
 enum OrganizationRole {

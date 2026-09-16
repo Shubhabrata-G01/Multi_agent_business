@@ -35,10 +35,10 @@ export async function GET(
       : undefined;
 
   if (flowStep) {
-    return NextResponse.json({ versions: listArtifactVersions(id, flowStep) });
+    return NextResponse.json({ versions: await listArtifactVersions(id, flowStep) });
   }
 
   return NextResponse.json({
-    artifacts: queryArtifacts(id, { agent_id: agentId, claim_type: claimType }),
+    artifacts: await queryArtifacts(id, { agent_id: agentId, claim_type: claimType }),
   });
 }
