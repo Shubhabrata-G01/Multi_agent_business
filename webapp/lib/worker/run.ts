@@ -56,12 +56,25 @@ async function processJob(job: ClaimedJob): Promise<void> {
     logger.info("worker completed job", { workerId: WORKER_ID, jobId: job.id, runId: job.run_id });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const willRetry = await failJob(job.id, job.attempts, job.max_attempts, message);
-    if (willRetry) {
-      logger.warn("job failed, will retry", { workerId: WORKER_ID, jobId: job.id, runId: job.run_id }, err);
-    } else {
-      logger.error("job failed, attempts exhausted", { workerId: WORKER_ID, jobId: job.id, runId: job.run_id }, err);
-      await markRunFailedIfStillRunning(job.run_id, message);
+    try {
+      const willRetry = await failJob(job.id, job.attempts, job.max_attempts, message);
+      if (willRetry) {
+        logger.warn("job failed, will retry", { workerId: WORKER_ID, jobId: job.id, runId: job.run_id }, err);
+      } else {
+        logger.error("job failed, attempts exhausted", { workerId: WORKER_ID, jobId: job.id, runId: job.run_id }, err);
+        await markRunFailedIfStillRunning(job.run_id, message);
+      }
+    } catch (handlingErr) {
+      // The error-handling path itself failed (e.g. a DB hiccup calling
+      // failJob) - this must never crash the worker process (an unhandled
+      // rejection here previously took the whole process down - found via a
+      // live test). Log both and move on; the job's lease will simply
+      // expire and another worker (or this one, on its next poll) recovers it.
+      await captureException("failed to record job failure", handlingErr, {
+        workerId: WORKER_ID,
+        jobId: job.id,
+        runId: job.run_id,
+      });
     }
   } finally {
     clearInterval(heartbeat);
@@ -101,7 +114,13 @@ async function pollLoop(): Promise<void> {
       continue;
     }
     const claimed = job;
-    const p = processJob(claimed).finally(() => inFlight.delete(claimed.id));
+    // Final safety net: processJob already catches everything itself, but a
+    // worker process must never die from an unhandled rejection in a
+    // background job - one bad job should never take down every other run
+    // this worker is handling.
+    const p = processJob(claimed)
+      .catch((err) => captureException("unexpected error processing job", err, { workerId: WORKER_ID, jobId: claimed.id, runId: claimed.run_id }))
+      .finally(() => inFlight.delete(claimed.id));
     inFlight.set(claimed.id, p);
   }
 }

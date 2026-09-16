@@ -257,6 +257,16 @@ export interface RunConfig {
     max_usd?: number;
   };
   enabled_tool_scopes: string[]; // tool-registry ids this run may use; empty in simulation
+  // Phased execution (STEP 8 items 1/2/5) - see lib/phaseScopes.ts.
+  // phase_scope is informational (what the user picked, for display);
+  // stop_after_flow_step is the actual mechanism: executeRun holds the run
+  // once this flow_step completes with an "advance" decision, rather than
+  // continuing into the next phase automatically. Cleared (set to null) the
+  // moment that hold fires, so resuming continues to completion instead of
+  // re-pausing at the same boundary - a user who resumes has already made
+  // the deliberate choice to go further.
+  phase_scope?: string;
+  stop_after_flow_step?: string | null;
 }
 
 // One entry per gate evaluation - the run's actual execution path, since steps can

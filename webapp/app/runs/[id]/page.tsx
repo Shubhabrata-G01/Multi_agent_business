@@ -160,6 +160,13 @@ function groupByPhase(steps: StepResult[]): [string, StepResult[]][] {
   return Array.from(groups.entries());
 }
 
+interface UsageSummary {
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  provider_calls: number;
+}
+
 export default function RunPage() {
   const params = useParams<{ id: string }>();
   const [run, setRun] = useState<RunState | null>(null);
@@ -172,11 +179,24 @@ export default function RunPage() {
   const [cancelling, setCancelling] = useState(false);
   const [approvalReason, setApprovalReason] = useState("");
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const pendingApprovalRef = useRef<{ approvalId: string; decision: "approve" | "reject" } | null>(
     null,
   );
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
+
+  function pollUsage() {
+    // STEP 8 item 4: live usage/cost so far, polled alongside status.
+    fetch(`/api/runs/${params.id}/usage`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!cancelledRef.current && data) setUsage(data);
+      })
+      .catch(() => {});
+  }
 
   function poll() {
     fetch(`/api/runs/${params.id}`, { cache: "no-store" })
@@ -192,6 +212,7 @@ export default function RunPage() {
         const data: RunState = await res.json();
         if (!cancelledRef.current) {
           setRun(data);
+          pollUsage();
           if (data.status === "running") {
             timerRef.current = setTimeout(poll, 2500);
           }
@@ -313,6 +334,29 @@ export default function RunPage() {
     }
   }
 
+  // STEP 8 item 9: privacy/retention UX - permanently deletes this run and
+  // everything derived from it (lib/dataRetention.ts). Irreversible.
+  async function handleDelete() {
+    if (!window.confirm("Permanently delete this run and all its artifacts, comments, and usage records? This cannot be undone.")) {
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(`/api/runs/${params.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        setDeleteError(data.error ?? "Failed to delete run.");
+        return;
+      }
+      window.location.href = "/";
+    } catch {
+      setDeleteError("Failed to delete run.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   if (notFound) {
     return (
       <main>
@@ -372,10 +416,12 @@ export default function RunPage() {
             <a href={`/runs/${run.id}/review`}>review workspace</a> to comment, mark items reviewed, or
             export the full audit trail.
           </>
-        )}
+        )}{" "}
+        Confidence/evidence-quality badges below are each agent&apos;s own self-assessment, not a
+        verified or measured fact.
       </div>
 
-      <div className="field-row" style={{ marginBottom: 16 }}>
+      <div className="field-row" style={{ marginBottom: 8 }}>
         <a href={`/runs/${run.id}/review`}>
           <button type="button">Open review workspace</button>
         </a>
@@ -384,7 +430,20 @@ export default function RunPage() {
             {cancelling ? "Cancelling…" : "Cancel run"}
           </button>
         )}
+        <button onClick={handleDelete} disabled={deleting} style={{ marginLeft: "auto" }}>
+          {deleting ? "Deleting…" : "Delete run"}
+        </button>
       </div>
+      {deleteError && <div className="step-reason" style={{ marginBottom: 8 }}>{deleteError}</div>}
+
+      {usage && usage.provider_calls > 0 && (
+        <p className="subtitle" style={{ marginTop: -4, marginBottom: 16 }}>
+          Usage so far: {usage.provider_calls} agent call(s), {usage.input_tokens.toLocaleString()} in /{" "}
+          {usage.output_tokens.toLocaleString()} out tokens, ~$
+          {usage.estimated_cost_usd < 0.01 ? "<0.01" : usage.estimated_cost_usd.toFixed(2)} estimated
+          cost.
+        </p>
+      )}
 
       <div className="progress-bar-track">
         <div className="progress-bar-fill" style={{ width: `${pct}%` }} />

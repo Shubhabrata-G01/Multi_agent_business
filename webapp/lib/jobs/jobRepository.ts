@@ -131,7 +131,13 @@ export async function renewLease(jobId: string, workerId: string): Promise<void>
 }
 
 export async function completeJob(jobId: string): Promise<void> {
-  await prisma.job.update({
+  // updateMany (not update): if the job row was deleted out from under an
+  // in-flight execution (e.g. DELETE /api/runs/[id] mid-run - see
+  // lib/dataRetention.ts), there's nothing left to mark complete - a no-op,
+  // not a crash. update() throws P2025 in that case and previously took the
+  // whole worker process down with an unhandled rejection (found via a live
+  // test that deleted a run's job mid-execution).
+  await prisma.job.updateMany({
     where: { id: jobId },
     data: { status: "done", api_key_ciphertext: null, locked_by: null, lease_expires_at: null },
   });
@@ -154,8 +160,10 @@ export async function failJob(
   maxAttempts: number,
   error: string,
 ): Promise<boolean> {
+  // updateMany throughout (see completeJob's comment) - a job row deleted
+  // out from under an in-flight execution is a no-op here, not a crash.
   if (attempts >= maxAttempts) {
-    await prisma.job.update({
+    await prisma.job.updateMany({
       where: { id: jobId },
       data: {
         status: "failed",
@@ -167,7 +175,7 @@ export async function failJob(
     });
     return false;
   }
-  await prisma.job.update({
+  await prisma.job.updateMany({
     where: { id: jobId },
     data: {
       status: "queued",

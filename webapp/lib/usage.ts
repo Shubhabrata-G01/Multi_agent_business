@@ -73,6 +73,32 @@ export async function getRunCostUsd(runId: string): Promise<number> {
   return agg._sum.estimated_cost_usd ?? 0;
 }
 
+export interface RunUsageSummary {
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost_usd: number;
+  provider_calls: number;
+}
+
+/** Live usage so far for a run (STEP 8 item 4) - polled by the run detail
+ * page alongside run status. */
+export async function getRunUsageSummary(runId: string): Promise<RunUsageSummary> {
+  if (getStorageBackend() !== "postgres") {
+    return { input_tokens: 0, output_tokens: 0, estimated_cost_usd: 0, provider_calls: 0 };
+  }
+  const agg = await prisma.usageEvent.aggregate({
+    where: { run_id: runId },
+    _sum: { input_tokens: true, output_tokens: true, estimated_cost_usd: true },
+    _count: true,
+  });
+  return {
+    input_tokens: agg._sum.input_tokens ?? 0,
+    output_tokens: agg._sum.output_tokens ?? 0,
+    estimated_cost_usd: agg._sum.estimated_cost_usd ?? 0,
+    provider_calls: agg._count,
+  };
+}
+
 export async function getOrganizationMonthlyTokens(organizationId: string): Promise<number> {
   if (getStorageBackend() !== "postgres") return 0;
   const startOfMonth = new Date();

@@ -177,6 +177,20 @@ describeIfDb("PostgreSQL jobRepository", () => {
     expect(row.locked_by).toBeNull();
   });
 
+  it("completeJob does not throw when the job row no longer exists (deleted mid-execution)", async () => {
+    // Regression test: a run can be deleted while its job is still
+    // in-flight (lib/dataRetention.ts's DELETE /api/runs/[id]). Previously
+    // completeJob used prisma.job.update() (throws P2025 on a missing row),
+    // which crashed the entire worker process with an unhandled rejection -
+    // found via a live test. It must be a graceful no-op instead.
+    await expect(repo.completeJob("nonexistent-job-id")).resolves.toBeUndefined();
+  });
+
+  it("failJob does not throw when the job row no longer exists (deleted mid-execution)", async () => {
+    await expect(repo.failJob("nonexistent-job-id", 1, 5, "some error")).resolves.toBe(true);
+    await expect(repo.failJob("nonexistent-job-id", 5, 5, "some error")).resolves.toBe(false);
+  });
+
   it("cancelJob marks a queued or running job cancelled and clears its key", async () => {
     const runId = newRunId();
     await repo.enqueueJob(runId, "anthropic", "claude-haiku-4-5-20251001", "sk-ant-key");

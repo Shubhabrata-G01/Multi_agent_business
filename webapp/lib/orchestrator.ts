@@ -12,6 +12,7 @@ import { enqueueRun } from "./jobQueue";
 import { cancelJob, enqueueJob } from "./jobs/jobRepository";
 import { checkArtifactMedium } from "./mediumValidator";
 import { buildRoadmapForProfile } from "./roadmap";
+import { lastStepOfScope, type PhaseScope } from "./phaseScopes";
 import { roadmapIntegrityErrors } from "./roadmapIntegrity";
 import { reviewersForNode } from "./router";
 import {
@@ -1033,6 +1034,7 @@ function initRun(
   mode: ExecutionMode,
   roadmap: Roadmap,
   profile: BusinessProfile | undefined,
+  phaseScope: PhaseScope,
 ): RunState {
   // Steps are built from the run's own roadmap nodes, not the global flow -
   // this is the seam that makes the workflow a per-run input (Phase 0b). For
@@ -1077,6 +1079,8 @@ function initRun(
       max_total_executions: MAX_TOTAL_STEP_EXECUTIONS,
     },
     enabled_tool_scopes: [],
+    phase_scope: phaseScope,
+    stop_after_flow_step: lastStepOfScope(roadmap, phaseScope),
   };
 
   const now = new Date().toISOString();
@@ -1610,6 +1614,35 @@ export async function executeRun(
         return;
       }
 
+      // STEP 8 items 1/2/5: phased execution. If this step is the last one
+      // in the user's selected scope and it would otherwise advance, hold
+      // here instead of continuing into the next phase automatically -
+      // stop_after_flow_step is cleared so a resume (a deliberate choice to
+      // go further) proceeds to completion rather than re-pausing at the
+      // same spot.
+      if (gateResult.action === "advance" && run.config?.stop_after_flow_step === stepDef.flow_step) {
+        run.config.stop_after_flow_step = null;
+        stepResult.gate_decision = "held";
+        stepResult.gate_reason = `Reached the end of the selected phase (${run.config.phase_scope ?? "scope"}).`;
+        await recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
+        run.path.push({
+          flow_step: stepDef.flow_step,
+          attempt: attemptNumber,
+          decision: "held",
+          reason: `${stepResult.gate_reason} Resume to continue building.`,
+          at: stepResult.finished_at,
+        });
+        // This step itself is done (the gate said "advance") - only the
+        // NEXT step is what's being deferred, so move the program counter
+        // past it now. Otherwise a resume would re-run this already-
+        // completed step from scratch instead of continuing to the next one.
+        run.current_step_index = pc + 1;
+        run.status = "held";
+        run.updated_at = new Date().toISOString();
+        await saveRun(run);
+        return;
+      }
+
       stepResult.gate_decision = gateResult.action;
       stepResult.gate_reason = gateResult.reason;
       await recordGateDecision(id, stepDef.flow_step, attemptNumber, gateResult.action, gateResult.reason);
@@ -1721,6 +1754,7 @@ export async function startRun(
   profile: BusinessProfile | undefined = undefined,
   ownerId = "legacy-owner",
   organizationId = "legacy-org",
+  phaseScope: PhaseScope = "full",
 ): Promise<string> {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
@@ -1744,7 +1778,7 @@ export async function startRun(
     );
   }
 
-  const run = initRun(id, ownerId, organizationId, idea, provider, model, source, mode, roadmap, profile);
+  const run = initRun(id, ownerId, organizationId, idea, provider, model, source, mode, roadmap, profile, phaseScope);
   // Awaited: the caller (POST /api/runs) must not report a run as created
   // until its initial state is actually durable.
   await saveRun(run);

@@ -47,6 +47,23 @@ interface BusinessProfile {
   validation_notes: string[];
 }
 
+interface PhaseScopeDef {
+  id: string;
+  label: string;
+  description: string;
+  throughPhase: string | null;
+}
+
+interface RunEstimate {
+  steps: number;
+  estimated_tasks: number;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  estimated_cost_usd: number;
+  estimated_duration_minutes: number;
+  based_on: "historical_average" | "heuristic_default";
+}
+
 interface RunSummary {
   id: string;
   idea: string;
@@ -72,6 +89,10 @@ export default function HomePage() {
   const [profile, setProfile] = useState<BusinessProfile | null>(null);
   const [classifying, setClassifying] = useState(false);
   const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [phaseScope, setPhaseScope] = useState("full");
+  const [scopes, setScopes] = useState<PhaseScopeDef[]>([]);
+  const [estimate, setEstimate] = useState<RunEstimate | null>(null);
+  const [estimating, setEstimating] = useState(false);
 
   useEffect(() => {
     fetch("/api/runs")
@@ -85,6 +106,31 @@ export default function HomePage() {
       .then((data) => setRuns(data?.runs ?? []))
       .catch(() => {});
   }, [router]);
+
+  // STEP 8 item 3: estimated cost/duration before starting, refreshed
+  // whenever provider/model/phase scope changes. No provider call is made -
+  // see lib/costEstimate.ts.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setEstimating(true);
+      fetch("/api/estimate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model, phaseScope, profile: profile ?? undefined }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) {
+            setEstimate(data.estimate);
+            if (scopes.length === 0) setScopes(data.scopes ?? []);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setEstimating(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, model, phaseScope, profile]);
 
   function handleProviderChange(next: LLMProvider) {
     setProvider(next);
@@ -131,7 +177,7 @@ export default function HomePage() {
       const res = await fetch("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, provider, model, apiKey, mode, profile: profile ?? undefined }),
+        body: JSON.stringify({ idea, provider, model, apiKey, mode, phaseScope, profile: profile ?? undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -152,15 +198,24 @@ export default function HomePage() {
     <main>
       <h1>AI Company Builder</h1>
       <p className="subtitle">
+        <strong>AI-assisted planning and decision support</strong> — not an
+        autonomous company. Nothing here deploys code, spends money, signs a
+        contract, or contacts a real customer; it drafts documents and
+        recommendations for a human to review and act on (see
+        &quot;Known simplifications&quot; in the docs for exactly what is and
+        isn&apos;t connected).
+      </p>
+      <p className="subtitle">
         Describe a business idea. A 38-agent AI organization — CEO, CTO, CFO,
         Product, Design, Engineering, AI/Data, Growth, Sales, Customer
-        Success, Finance, Legal, People, Operations — will work through all 81
-        steps of the company&apos;s idea-to-expansion business flow. Choose the
+        Success, Finance, Legal, People, Operations — drafts its way through
+        up to 81 steps of an idea-to-expansion business flow (pick a smaller
+        scope below if you don&apos;t need the full build). Choose the
         execution mode below: <strong>Assisted</strong> (approval-gated —
         agents flag consequential actions for human sign-off) or{" "}
-        <strong>Simulation</strong> (fully autonomous, plans and drafts only).
-        Every step is a real, billed API call using the provider and key you
-        choose below.
+        <strong>Simulation</strong> (fully autonomous, advisory only, no
+        human approval at any point). Every step is a real, billed API call
+        using the provider and key you choose below.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -244,8 +299,54 @@ export default function HomePage() {
           <p className="field-hint">
             {mode === "assisted"
               ? "Agents draft and plan, but must stop and mark any consequential action (pricing, deploys, spend, hiring, legal, funds) as PENDING_HUMAN_APPROVAL instead of deciding it themselves."
-              : "Agents decide every step themselves with no human gate — including actions that would normally need sign-off. Produces plans and drafts only; nothing is executed in the real world. Use for exploration, not for decisions you would act on."}
+              : "ADVISORY, NON-EXECUTING, NOT HUMAN-APPROVED: agents decide every step themselves with no human gate at all, including decisions that would normally need sign-off. Produces plans and drafts only — nothing is executed in the real world, and no output here has been reviewed or approved by a person. Use for exploration, never as the basis for a real decision."}
           </p>
+        </div>
+
+        <div className="field">
+          <label htmlFor="phaseScope">Scope</label>
+          <select
+            id="phaseScope"
+            value={phaseScope}
+            onChange={(e) => setPhaseScope(e.target.value)}
+            disabled={submitting}
+          >
+            {(scopes.length > 0
+              ? scopes
+              : [{ id: "full", label: "Full company build", description: "", throughPhase: null }]
+            ).map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <p className="field-hint">
+            {scopes.find((s) => s.id === phaseScope)?.description ??
+              "All steps, Inception through Expansion."}{" "}
+            {phaseScope !== "full" &&
+              "The run pauses once this phase finishes — resume it any time to continue further."}
+          </p>
+          {(estimating || estimate) && (
+            <p className="field-hint" style={{ marginTop: 6 }}>
+              {estimating && !estimate
+                ? "Estimating…"
+                : estimate && (
+                    <>
+                      Estimated: ~{estimate.steps} step{estimate.steps === 1 ? "" : "s"}, ~
+                      {estimate.estimated_tasks} agent call(s), ~$
+                      {estimate.estimated_cost_usd < 0.01 ? "<0.01" : estimate.estimated_cost_usd.toFixed(2)}
+                      , ~{estimate.estimated_duration_minutes} minute
+                      {estimate.estimated_duration_minutes === 1 ? "" : "s"}.{" "}
+                      <em>
+                        {estimate.based_on === "historical_average"
+                          ? "Based on this organization's own recent usage."
+                          : "Rough heuristic — actual usage varies by idea complexity and model."}{" "}
+                        Not a guarantee.
+                      </em>
+                    </>
+                  )}
+            </p>
+          )}
         </div>
 
         <div className="field">
@@ -275,6 +376,11 @@ export default function HomePage() {
               <div style={{ marginBottom: 6 }}>
                 <strong>{profile.industry}</strong> · {profile.business_model} ·{" "}
                 <span className="badge pending">{profile.confidence} confidence</span>
+              </div>
+              <div className="field-hint" style={{ marginBottom: 6, opacity: 0.8 }}>
+                &quot;Confidence&quot; is the model&apos;s own self-assessment of this
+                classification, not a verified or measured fact — treat it as a hint about how much
+                to double-check, not as truth.
               </div>
               <div className="field-hint" style={{ marginBottom: 4 }}>
                 Customer: {profile.customer} · Maturity: {profile.maturity} · Capital:{" "}
@@ -346,6 +452,13 @@ export default function HomePage() {
           ))}
         </div>
       )}
+
+      <p className="field-hint" style={{ marginTop: 32, opacity: 0.7 }}>
+        Privacy &amp; data: a run and everything derived from it (artifacts, comments, usage records)
+        is kept until you delete it — each run has a <strong>Delete run</strong> button, and its own
+        page offers <strong>JSON/Markdown/CSV export</strong> at any time. Deletion is permanent and
+        cannot be undone.
+      </p>
     </main>
   );
 }

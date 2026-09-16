@@ -7,6 +7,7 @@ import { assertCanStartRun, QuotaExceededError } from "@/lib/quotas";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireSameOrigin } from "@/lib/csrf";
 import { firstIssueMessage, ideaSchema } from "@/lib/validation";
+import { isPhaseScope } from "@/lib/phaseScopes";
 import {
   isValidProvider,
   PROVIDER_DEFAULT_MODEL,
@@ -113,6 +114,10 @@ export async function POST(request: Request) {
   // legacy fully-autonomous behavior. See lib/types.ts ExecutionMode.
   const rawMode = obj.mode === "simulation" ? "simulation" : "assisted";
 
+  // Phased execution (STEP 8 items 1/2/5) - defaults to "full" (the entire
+  // 81-step flow) when omitted, matching pre-existing behavior exactly.
+  const phaseScope = isPhaseScope(obj.phaseScope) ? obj.phaseScope : "full";
+
   // Optional BusinessProfile from the intake step (Phase 0c). It originates from
   // this app's own /api/classify, so it's accepted as-is when present; the run
   // stores it as informational context. Absent for the direct "just run it" path.
@@ -123,7 +128,7 @@ export async function POST(request: Request) {
 
   let id: string;
   try {
-    id = await startRun(idea, provider, model, apiKey, rawMode, profile, authResult.user.id, organizationId);
+    id = await startRun(idea, provider, model, apiKey, rawMode, profile, authResult.user.id, organizationId, phaseScope);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing key on both the request and the server env is the caller's

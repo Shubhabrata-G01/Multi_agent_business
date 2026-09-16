@@ -254,6 +254,33 @@ placeholder.
   the model's actual max output on the provider's docs and pick one with
   headroom above `LLM_MAX_TOKENS`, rather than relying on the auto-retry.
 
+## Phased execution, cost estimation, and live usage
+
+You don't have to run all 81 steps. The home page's **Scope** selector
+(`lib/phaseScopes.ts`) offers 8 presets - Discovery, Validation, Go/No-Go,
+Strategy, Product, Engineering, Finance/viability, or the full build - each
+naming the last business phase it runs through (contiguous ranges of
+`flow_step`, verified against the real flow in
+`lib/phaseScopes.test.ts`). Picking anything narrower than "Full company
+build" doesn't shrink the run's own step list - it sets
+`RunConfig.stop_after_flow_step`, and `executeRun` **pauses** (holds) once
+that step finishes advancing, the same way it already pauses for a pending
+approval. Resume any time to continue past that boundary; the pause doesn't
+recur. "Finance" is the one honest compromise - this flow has no standalone
+late-stage finance phase reachable without the fuller build, so it means
+"run far enough to know if the business is profitable" (through
+Profitability), not an isolated slice.
+
+Before starting, `POST /api/estimate` (`lib/costEstimate.ts`) returns an
+estimated step/task count, token usage, cost, and duration for the selected
+provider/model/scope - using this organization's own historical per-call
+averages once it has at least 10 prior calls on that provider+model, falling
+back to a fixed heuristic otherwise. No provider call is made to produce the
+estimate. While a run is in progress, `GET /api/runs/[id]/usage`
+(`lib/usage.ts`) reports real tokens/cost spent so far, polled by the run
+page alongside status. Both are estimates/live totals, never a guarantee or
+a bill - the UI says so.
+
 ## Review workspace and exports
 
 Every task output (Creator/Critic/Contributor/Approver/Executor, every
