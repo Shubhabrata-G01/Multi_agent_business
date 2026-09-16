@@ -102,6 +102,56 @@ npm run db:migrate
 The active backend is logged on server startup (`instrumentation.ts`) and on
 first use (`[storage] Using the ... backend`).
 
+### Durable execution (`npm run worker`)
+
+On the PostgreSQL backend, starting or resuming a run does **not** execute it
+in the web process - it enqueues a row in the `Job` table
+(`lib/jobs/jobRepository.ts`) and returns immediately. A separate, standalone
+process claims and runs it:
+
+```bash
+npm run worker
+```
+
+Run one or more of these (same `DATABASE_URL`/`AUTH_SECRET`, on the same host
+or separately) alongside `npm run dev`/`npm run start`. Why a separate
+process, and what it buys you:
+
+- **A web-process restart/deploy never interrupts a run.** The web process
+  holds no execution state - it only ever reads/writes the DB - so redeploying
+  it mid-run is safe.
+- **A worker crash is recoverable.** Each claimed job holds a time-limited
+  lease, renewed on a heartbeat while the worker is alive; if a worker dies,
+  the lease expires and another worker (or the same one, restarted) reclaims
+  the job. `executeRun` always resumes from the run's persisted
+  `current_step_index` rather than from anything held in memory, so a
+  reclaimed job picks up exactly where the crashed attempt left off.
+- **Two workers can never run the same job concurrently** - claiming is one
+  atomic `UPDATE ... FOR UPDATE SKIP LOCKED` query, so horizontally scaling
+  workers is just running more of them.
+- **Bounded retries with exponential backoff** for job-level (infrastructure)
+  failures - a worker process dying mid-step, a transient DB error escaping
+  `executeRun`'s own error handling. This is distinct from the orchestrator's
+  own business-level step retries (`evaluateGate`'s `retry_step`/
+  `return_to_step`), which it already handled before a job ever failed.
+- **Graceful shutdown**: SIGINT/SIGTERM stops claiming new jobs and waits
+  (`WORKER_SHUTDOWN_GRACE_MS`, default 30s) for in-flight jobs to finish
+  before exiting; anything still running when the grace period elapses is
+  picked up by another worker once its lease expires.
+
+A user-supplied (BYOK) API key is encrypted (AES-256-GCM, keyed from
+`AUTH_SECRET`) into the job row just long enough to travel from the web
+process to whichever worker executes it, and is cleared the moment the job
+reaches a terminal state - see `lib/jobs/providerKeyBox.ts`. A
+server-configured key (`ANTHROPIC_API_KEY` etc.) is never written to the DB
+at all: the worker re-resolves it from its own environment.
+
+In **filesystem mode** (no `DATABASE_URL`), there is no `Job` table to
+enqueue into - runs execute in-process instead, exactly as before (see
+`lib/jobQueue.ts`), and `npm run worker` refuses to start (nothing to poll).
+This is fine for local development; filesystem mode has no durability
+guarantees regardless of whether a worker is involved.
+
 ## How it works
 
 - `lib/businessFlow.ts` reads `../company/agents/registry.json` and
@@ -134,11 +184,13 @@ first use (`[storage] Using the ... backend`).
   on. The PostgreSQL backend rejects a write based on stale data
   (optimistic concurrency - see `lib/db/runRepository.ts`) rather than
   silently losing a concurrent update (e.g. a `cancel` racing the run loop).
-  Note the execution loop itself is still an in-process background task (see
-  `lib/jobQueue.ts`), so a server restart mid-step can orphan a `running` run
-  — `healIfStale` detects this on the next read and flips it to `failed` so
-  it can be resumed (a durable worker queue that survives a restart is the
-  planned fix; see `../company/architecture/12-business-os-evolution.md`).
+  On the PostgreSQL backend the execution loop itself runs in the separate,
+  durable `npm run worker` process (see "Durable execution" above), which
+  survives a web-process restart and recovers from its own crash via lease
+  expiry. Only in filesystem mode does it still run as an in-process
+  background task (`lib/jobQueue.ts`), where a server restart mid-step can
+  orphan a `running` run - `healIfStale` detects this on the next read and
+  flips it to `failed` so it can be resumed.
 - A Creator that reports `status: blocked` in its artifact-meta halts the run
   rather than continuing on a broken chain — downstream steps depend on
   upstream artifacts, so silently skipping one would corrupt everything after
