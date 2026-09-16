@@ -40,6 +40,7 @@ function makeTask(
   verdict: StepTask["verdict"],
 ): StepTask {
   return {
+    id: "task-1",
     role,
     agent_id: "AG-1",
     agent_name: "Agent One",

@@ -341,6 +341,8 @@ export default function RunPage() {
   const lastPathEntry = run.path.length ? run.path[run.path.length - 1] : null;
   const pendingApprovals = (run.approvals ?? []).filter((a) => a.status === "pending");
 
+  const isSimulation = (run.mode ?? "simulation") === "simulation";
+
   return (
     <main>
       <a className="back-link" href="/">
@@ -355,6 +357,35 @@ export default function RunPage() {
           : "using this server's configured key"}
       </p>
 
+      <div className="top-error" style={{ background: "var(--panel-2)", borderColor: "var(--accent)" }}>
+        {isSimulation ? (
+          <>
+            <strong>Simulation mode — advisory only, not human-approved.</strong> Every artifact below
+            is AI-generated and this run never pauses for human sign-off, including decisions that
+            would normally require it (pricing, deploys, spend, hiring, legal). Read it as a draft, not
+            a record of anything that actually happened.
+          </>
+        ) : (
+          <>
+            <strong>AI-generated output.</strong> Only Level-2+ gate decisions with a recorded approval
+            below carry human sign-off — everything else is a draft. See the{" "}
+            <a href={`/runs/${run.id}/review`}>review workspace</a> to comment, mark items reviewed, or
+            export the full audit trail.
+          </>
+        )}
+      </div>
+
+      <div className="field-row" style={{ marginBottom: 16 }}>
+        <a href={`/runs/${run.id}/review`}>
+          <button type="button">Open review workspace</button>
+        </a>
+        {(run.status === "running" || run.status === "held") && (
+          <button onClick={handleCancel} disabled={cancelling}>
+            {cancelling ? "Cancelling…" : "Cancel run"}
+          </button>
+        )}
+      </div>
+
       <div className="progress-bar-track">
         <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
       </div>
@@ -362,12 +393,6 @@ export default function RunPage() {
         {doneCount} / {run.total_steps} steps complete
         {run.status === "running" && " — refreshing automatically"}
       </p>
-
-      {(run.status === "running" || run.status === "held") && (
-        <button onClick={handleCancel} disabled={cancelling} style={{ marginBottom: 16 }}>
-          {cancelling ? "Cancelling…" : "Cancel run"}
-        </button>
-      )}
 
       {run.error && <div className="top-error">{run.error}</div>}
 

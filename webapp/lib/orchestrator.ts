@@ -722,6 +722,7 @@ function parseLabeledResponse(text: string, label: string, values: string[]): Pa
 
 function newTask(role: TaskRole, agent: RegistryAgent, model: string): StepTask {
   return {
+    id: crypto.randomUUID(),
     role,
     agent_id: agent.id,
     agent_name: agent.name,

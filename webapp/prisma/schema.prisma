@@ -126,6 +126,43 @@ model Job {
   @@index([status, available_at])
 }
 
+// Review workspace (STEP 5 items 7/9): a human comment on a step's artifact
+// or a specific task output within it - independent of the formal gate
+// approval flow (ApprovalRequest, embedded in Run.data), which only exists
+// for Level-2+ gate steps. A comment can be left on ANY step, gate or not.
+model Comment {
+  id            String   @id @default(cuid())
+  run_id        String
+  flow_step     String
+  attempt       Int
+  task_id       String? // null = comment on the step/artifact as a whole
+  author_id     String
+  author_email  String
+  body          String
+  created_at    DateTime @default(now())
+
+  @@index([run_id, flow_step, attempt])
+}
+
+// One row per (run, step, attempt) - assign-reviewer / mark-reviewed /
+// request-changes (STEP 5 item 7), independent of the formal gate approval
+// flow. "status" is "assigned" | "reviewed" | "changes_requested".
+model StepReview {
+  id              String   @id @default(cuid())
+  run_id          String
+  flow_step       String
+  attempt         Int
+  reviewer_id     String?
+  reviewer_email  String?
+  status          String
+  note            String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@unique([run_id, flow_step, attempt])
+  @@index([run_id])
+}
+
 // One row per provider call (STEP 4 item 8) - written by lib/usage.ts right
 // after each StepTask completes (orchestrator.ts's runTask). Backs quota
 // enforcement (concurrent/daily run counts come from Run; monthly token

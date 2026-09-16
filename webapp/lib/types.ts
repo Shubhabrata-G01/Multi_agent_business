@@ -41,6 +41,10 @@ export type TaskRole = "creator" | "critic" | "approver" | "executor" | "contrib
 export type TaskVerdict = "approved" | "changes_requested" | "rejected" | null;
 
 export interface StepTask {
+  // Stable identifier (STEP 5 item 2) - lets a task output be addressed
+  // independently (a comment target, an export row) rather than only by its
+  // position in steps[].tasks[].
+  id: string;
   role: TaskRole;
   agent_id: string;
   agent_name: string;
