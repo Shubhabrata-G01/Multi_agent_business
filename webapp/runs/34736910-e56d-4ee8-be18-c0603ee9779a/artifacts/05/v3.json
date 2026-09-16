@@ -1,0 +1,66 @@
+{
+  "run_id": "34736910-e56d-4ee8-be18-c0603ee9779a",
+  "flow_step": "05",
+  "output_artifact": "Research Findings; Journey Map",
+  "attempt": 3,
+  "agent_id": "UXR-001",
+  "agent_name": "UX Researcher",
+  "content": "# Research Findings & Journey Map — Step 05: Research Customer Workflows\n\n**Artifact type:** Research Findings; Journey Map\n**Flow step:** 05 (Problem Discovery — Primary)\n**Owner:** UXR-001\n**Revision:** 2 (response to PM-001 critic review — prior submission was empty and is superseded by this document in full)\n**Status:** Draft — Hypothesis-stage, NOT yet field-validated\n\n---\n\n## 0. What changed since the rejected v1\n\nThe prior submission contained no content. That was a process failure, not a defensible \"no evidence yet\" position — the quality bar requires that even when live research cannot be executed, the artifact must contain (a) a stated reason, (b) a Required Integration block, and (c) a best-effort, clearly-labeled hypothesis structure the team can act on or falsify. This revision supplies all three. No fabricated interview data is included anywhere below — where I have no real participant evidence, I say so and mark the content INFERENCE or ASSUMPTION, never FACT.\n\n---\n\n## 1. Why zero live interviews were conducted this round\n\n```\nRequired Integration:\nTool: User research/recruiting platform (participant panel + scheduling + session recording), or at minimum direct outreach via email/calendar\nCapability: Recruit target users, schedule sessions, record/transcribe interviews\nWhy Needed: Step 05 requires primary qualitative research (interviews/observation) to identify recurring pain points; this cannot be produced from reasoning alone without misrepresenting fabricated quotes as real data\nAlternative: In this run, no web research, browser automation, Gmail/Calendar, CRM, or panel tool was available. I substituted a structured hypothesis-driven journey map (Section 3) built from general domain/UX pattern-reasoning, explicitly flagged as unvalidated, to keep the workflow moving rather than returning an empty artifact a second time.\nHuman Escalation: A human (or CPO-001/PM-001 acting on the business's behalf) needs to connect a recruiting channel (even manual — personal network, existing waitlist, LinkedIn outreach, a Google Form) and conduct 5-8 real interviews before this artifact's findings can be upgraded from \"hypothesis\" to \"evidence.\"\n```\n\n**Additional input gap:** I did not receive the actual Problem Statement or ICP/Persona draft (outputs of steps 03-04) as input to this task. In a normal run those would be read from Project Memory; in this run I have no filesystem/API access to retrieve them. Everything below about the target user and domain is therefore built on a generic B2B/SMB-style workflow-pain pattern rather than this specific company's actual ICP. **This is the single largest risk in this artifact and is flagged for correction before PM-001 finalizes the Problem Statement.**\n\n---\n\n## 2. Research design (as planned — not yet executed)\n\n| Element | Plan |\n|---|---|\n| Method | Semi-structured 30-45 min interviews, screen-share observation of current workflow where possible |\n| Target sample | 6-8 participants matching the working ICP (pending confirmation from steps 03-04) |\n| Recruiting channel | Manual outreach (founder network, waitlist, LinkedIn/cold email) — no panel tool connected |\n| Minimum threshold to close question | 5 participants per Decision Logic rule, unless a strong unanimous signal emerges earlier |\n| Current sample size | **0 completed interviews** |\n| Interview guide status | Not yet drafted pending ICP confirmation; outline below is a placeholder |\n\n**Draft interview guide outline (unexecuted):**\n1. Walk me through the last time you [did the core job-to-be-done].\n2. What tools/spreadsheets/workarounds do you currently use?\n3. Where does it break down or take longer than it should?\n4. What have you tried before to fix that? Why didn't it stick?\n5. If you had a magic wand, what would change first?\n\n---\n\n## 3. Working Hypothesis Journey Map (unvalidated — INFERENCE, not FACT)\n\nBecause no primary or secondary evidence (support tickets, sales call notes, analytics) was accessible in this run, the stages below are constructed from **general, well-documented patterns in early-stage B2B/SMB workflow adoption** (a common industry pattern, not this specific ICP) — treat every row as a hypothesis to be confirmed or killed in the first 5 real interviews.\n\n| Stage | Hypothesized user behavior | Hypothesized pain point | Label | Confidence |\n|---|---|---|---|---|\n| **Trigger** | User hits a recurring, time-consuming manual task tied to the core workflow the product addresses | Task is tolerated because no clear alternative has been evaluated recently | INFERENCE | Low |\n| **Current workaround** | Spreadsheets, generic tools (email, Notes app, shared docs), or a manual/paper process | Workaround \"mostly works\" so switching cost feels unjustified until pain crosses a threshold | ASSUMPTION | Low |\n| **Trigger for change** | A specific breaking event (error, missed deadline, team growth, a bad month) prompts a search for a better way | Users under-report this trigger unless asked directly — likely to be discovered only through interviews, not surveys | ASSUMPTION | Low |\n| **Evaluation** | User asks peers or searches for tools; is skeptical of setup time vs. benefit | Fear of migration effort / data loss from switching tools | ASSUMPTION | Low |\n| **Adoption** | Partial adoption — one workflow migrated, workaround kept as backup \"just in case\" | Trust in a new tool builds slowly; full replacement of the old habit lags behind sign-up | ASSUMPTION | Low |\n| **Ongoing use** | Recurring use tied to a specific trigger cadence (weekly/monthly), not daily habit | Risk of churn if the tool isn't reinforced at the exact trigger moment | INFERENCE | Low |\n\n**Explicit callout (Critic behavior, per spec):** The biggest risk in treating this map as final is that teams under time pressure will want to design against it as if it were confirmed. It is not. Every \"pain point\" above should be read as \"a plausible hypothesis common to this category of problem,\" not \"what our users told us.\"\n\n---\n\n## 4. Findings — honest inventory\n\n**FACT:** Zero primary interviews were completed in this research round.\n**FACT:** No secondary data sources (support tickets, sales notes, analytics, existing survey data) were accessible in this environment/run.\n**ASSUMPTION:** The ICP referenced in steps 03-04 resembles a small business / SMB or early-stage team persona experiencing a recurring manual-workflow pain point (carried over from the standing example in this agent's spec; not confirmed for this specific company).\n**INFERENCE:** Given zero evidence, no recurring pain point can currently be asserted as validated. The gate criterion \"sufficient evidence exists to identify recurring pain points\" is **not met** by this artifact, and PM-001's original rejection of a fully empty artifact was correct on substance.\n\n**Confidence overall: LOW.** Sample size: 0 real participants. This is a placeholder research structure, not a research finding.\n\n---\n\n## 5. Recommendation to PM-001 / CPO-001 (Decision + Escalation)\n\n**DECISION (UXR-001):** Do not allow steps 06+ (Problem Statement finalization) to cite this document as validated evidence of recurring pain points. Recommend one of two paths:\n\n1. **Preferred:** Pause Problem Discovery gate for 3-5 business days while a human stakeholder personally recruits 5-8 target users (existing network, waitlist, warm intros) for interviews UXR-001 can then synthesize into a real, FACT-based findings document. This is the only way to responsibly close this research question.\n2. **Fallback (if timeline pressure prevents #1):** Proceed to Problem Statement drafting using the hypothesis map in Section 3 explicitly labeled as **unvalidated** and revisit/re-open this research question at the first available opportunity (e.g., alongside step 17 journey validation or step 27 usability testing), per the Loop/Re-entry condition for step 05 (\"repeat interviews if evidence is weak or conflicting\"). Any downstream artifact built on Section 3 must inherit its Low-confidence label and cannot be re-stated as confirmed.\n\n**ESCALATION:** Flagging to PM-001 and CPO-001 now, per Decision Logic, because a real decision (finalizing the Problem Statement/ICP) is at risk of proceeding on evidence this agent rates Low confidence with an n of 0. Human/organizational action needed: connect a recruiting channel or personally source 5+ interview participants — this is outside UXR-001's available tool access in this run.\n\n---\n\n## 6. Monitoring plan once real interviews occur\n\n- Track whether the hypotheses in Section 3 hold up against real interview data (validate/refute each row).\n- Update the Assumption Register: all six rows in Section 3 should be logged as \"Unvalidated — pending interviews.\"\n- Re-issue this artifact as v3 with real FACT-labeled findings once ≥5 interviews are complete, per the 5-participant minimum threshold rule.",
+  "meta": {
+    "status": "ok",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": "conditional",
+    "claims": [
+      {
+        "type": "assumption",
+        "text": "Zero primary user interviews were completed in this research round.",
+        "source": null
+      },
+      {
+        "type": "assumption",
+        "text": "No web research, browser automation, CRM, email/calendar, or research panel tool was available in this run to recruit or interview participants.",
+        "source": null
+      },
+      {
+        "type": "assumption",
+        "text": "The ICP for this business resembles an SMB/early-stage-team persona experiencing a recurring manual-workflow pain point, carried forward from prior context since steps 03-04 outputs were not provided as input to this task.",
+        "source": null
+      },
+      {
+        "type": "inference",
+        "text": "The journey-map stages (trigger, workaround, evaluation, adoption, ongoing use) and associated pain-point hypotheses follow common patterns in B2B/SMB workflow-tool adoption but are not confirmed for this specific ICP.",
+        "source": null
+      },
+      {
+        "type": "inference",
+        "text": "The gate criterion for step 05 ('sufficient evidence exists to identify recurring pain points') is not met by this artifact as evidence, only as a research plan and hypothesis set.",
+        "source": null
+      },
+      {
+        "type": "recommendation",
+        "text": "Pause the Problem Discovery gate 3-5 business days for a human to manually recruit 5-8 target users for real interviews before finalizing the Problem Statement.",
+        "source": null
+      },
+      {
+        "type": "decision",
+        "text": "UXR-001 will not represent the Section 3 hypothesis map as validated evidence; any downstream use must preserve its Low-confidence, unvalidated label, and the research question remains open pending real interviews.",
+        "source": null
+      }
+    ],
+    "open_questions": [
+      "What is the actual, confirmed Problem Statement and ICP from steps 03-04? (Not available in this run's context.)",
+      "Can a human stakeholder source 5-8 warm-network interview participants within the next few days?",
+      "Should the business proceed to draft a Problem Statement on hypothesis-only evidence (fallback path) or hold the gate (preferred path)?"
+    ],
+    "reason": null,
+    "validation_notes": [
+      "Downgraded 2 unsourced FACT claim(s) to ASSUMPTION - no external tool access is connected in this run to verify a source (company/architecture/07-mcp-tool-integration-policy.md)."
+    ]
+  },
+  "model": "claude-sonnet-5",
+  "provider": "anthropic",
+  "created_at": "2026-09-08T18:00:23.716Z",
+  "gate_decision": "held",
+  "gate_reason": "Retry/rework bounds exhausted with reviewer(s) still not satisfied."
+}

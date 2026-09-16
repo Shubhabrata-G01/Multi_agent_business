@@ -9,6 +9,7 @@ import { recordGateDecision, saveArtifactVersion } from "./artifactStore";
 import { validateClaimSources } from "./claimSourceValidator";
 import { extractEvidence } from "./evidence";
 import { enqueueRun } from "./jobQueue";
+import { cancelJob, enqueueJob } from "./jobs/jobRepository";
 import { checkArtifactMedium } from "./mediumValidator";
 import { buildRoadmapForProfile } from "./roadmap";
 import { roadmapIntegrityErrors } from "./roadmapIntegrity";
@@ -27,6 +28,7 @@ import { renderIntegrationNotice } from "./integrations";
 import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
+import { getStorageBackend } from "./storageBackend";
 import type {
   ApprovalRequest,
   ArtifactMeta,
@@ -1067,7 +1069,16 @@ function initRun(
  * reading/writing through the persisted RunState so a paused ("held") run
  * can be resumed later from exactly where it left off (see resumeRun).
  */
-async function executeRun(
+/**
+ * Runs the state machine loop for one run, from wherever its persisted
+ * current_step_index/status say it is, until it advances past the last step,
+ * holds, fails, or is cancelled. Always safe to (re-)invoke: it reloads the
+ * run fresh at the top of every iteration rather than carrying state across
+ * calls, which is exactly what makes it resumable after a crash - the
+ * durable worker (lib/worker/run.ts) calls this directly; there is no
+ * separate "resume from a checkpoint" code path to keep in sync.
+ */
+export async function executeRun(
   id: string,
   provider: LLMProvider,
   model: string,
@@ -1597,16 +1608,46 @@ async function executeRun(
 }
 
 /**
- * Starts a new autonomous business-build run and returns its id
- * immediately. Execution continues in the background (fire-and-forget);
- * poll GET /api/runs/[id] for progress. Errors during execution are
- * captured onto the run record rather than thrown here, since the caller
- * has already returned by the time they can occur.
+ * STEP 3: hands a run's execution off to durable infrastructure rather than
+ * calling executeRun in-process. On the PostgreSQL backend this enqueues a
+ * Job row that the standalone `npm run worker` process (lib/worker/run.ts)
+ * claims and drives - a process restart (web OR worker) never loses the run,
+ * since the worker re-derives all progress from the persisted RunState, not
+ * from anything held in this process's memory. On the filesystem backend
+ * (local-dev-only, no durability guarantees anyway - see
+ * lib/storageBackend.ts) there is no Job table to enqueue into, so this
+ * falls back to the original in-process fire-and-forget loop via
+ * lib/jobQueue.ts, keeping zero-setup `npm run dev` working without Postgres.
  *
- * The resolved API key is held only in this function's closure and passed
- * directly into each provider call - it is never written into the RunState
- * that gets persisted to runs/<id>.json, so it never touches disk or the
- * GET /api/runs/[id] response.
+ * `apiKey` is only passed through for a user-supplied (BYOK) key - see
+ * lib/jobs/providerKeyBox.ts for why a server-configured key never needs to
+ * travel this way at all.
+ */
+async function dispatchExecution(
+  id: string,
+  provider: LLMProvider,
+  model: string,
+  apiKey: string,
+  keySource: "user_provided" | "server_env",
+): Promise<void> {
+  if (getStorageBackend() === "postgres") {
+    await enqueueJob(id, provider, model, keySource === "user_provided" ? apiKey : undefined);
+    return;
+  }
+  enqueueRun(id, () => executeRun(id, provider, model, apiKey).catch((err) => failRunOnUncaughtError(id, err)));
+}
+
+/**
+ * Starts a new autonomous business-build run and returns its id
+ * immediately. Execution continues via dispatchExecution above; poll
+ * GET /api/runs/[id] for progress. Errors during execution are captured onto
+ * the run record rather than thrown here, since the caller has already
+ * returned by the time they can occur.
+ *
+ * The resolved API key is never written into the RunState that gets
+ * persisted (`data` column / `runs/<id>.json`), so it never touches the
+ * GET /api/runs/[id] response - see dispatchExecution/providerKeyBox.ts for
+ * how it reaches the process that actually makes the provider call.
  */
 export async function startRun(
   idea: string,
@@ -1647,7 +1688,7 @@ export async function startRun(
     cacheApiKey(id, apiKey);
   }
 
-  enqueueRun(id, () => executeRun(id, provider, model, apiKey).catch((err) => failRunOnUncaughtError(id, err)));
+  await dispatchExecution(id, provider, model, apiKey, source);
 
   return id;
 }
@@ -1662,7 +1703,7 @@ export async function startRun(
  * must not be clobbered by an error that raced it (e.g. a save that lost an
  * optimistic-concurrency conflict to that very operation).
  */
-async function failRunOnUncaughtError(id: string, err: unknown): Promise<void> {
+export async function failRunOnUncaughtError(id: string, err: unknown): Promise<void> {
   const message = "Unexpected orchestrator error: " + (err instanceof Error ? err.message : String(err));
   try {
     const run2 = await loadRun(id);
@@ -1725,9 +1766,7 @@ export async function resumeRun(id: string, suppliedApiKey: string | undefined):
   run.updated_at = new Date().toISOString();
   await saveRun(run);
 
-  enqueueRun(id, () =>
-    executeRun(id, run.provider, run.model, apiKey).catch((err) => failRunOnUncaughtError(id, err)),
-  );
+  await dispatchExecution(id, run.provider, run.model, apiKey, source);
 }
 
 /**
@@ -1826,4 +1865,14 @@ export async function cancelRun(id: string): Promise<void> {
   run.status = "cancelled";
   run.updated_at = new Date().toISOString();
   await saveRun(run);
+
+  // Best-effort: stops a queued-but-unclaimed durable job from ever starting.
+  // A job already claimed/running notices the status flip on its own next
+  // loop iteration (executeRun checks run.status at the top of every
+  // iteration) and exits normally within one iteration, same as before -
+  // this just makes that outcome visible on the Job row too. No-op on the
+  // filesystem backend (no Job table to update).
+  if (getStorageBackend() === "postgres") {
+    await cancelJob(id);
+  }
 }

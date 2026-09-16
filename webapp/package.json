@@ -10,6 +10,7 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "worker": "tsx lib/worker/run.ts",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy"
@@ -30,6 +31,7 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "prisma": "^6.19.0",
+    "tsx": "^4.23.13",
     "typescript": "^5.7.0",
     "vitest": "^5.0.0"
   }

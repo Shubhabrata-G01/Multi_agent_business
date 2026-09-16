@@ -80,3 +80,42 @@ enum OrganizationRole {
   MEMBER
   REVIEWER
 }
+
+// Durable execution queue (STEP 3) - lib/jobs/jobRepository.ts. One row per
+// run; startRun/resumeRun upsert it and the standalone worker process
+// (`npm run worker`, lib/worker/run.ts) claims/executes it. Replaces the
+// in-process fire-and-forget queue (lib/jobQueue.ts, still used only as the
+// local filesystem-mode dev fallback - see lib/jobs/dispatch.ts) for the
+// PostgreSQL backend.
+model Job {
+  id     String @id @default(cuid())
+  run_id String @unique
+
+  // "queued" | "running" | "done" | "failed" | "cancelled"
+  status String @default("queued")
+
+  attempts     Int @default(0)
+  max_attempts Int @default(5)
+
+  provider String
+  model    String
+  // AES-256-GCM ciphertext of a user-supplied (BYOK) key, keyed from
+  // AUTH_SECRET (see lib/jobs/providerKeyBox.ts) - null when the run uses a
+  // server-configured provider key (the worker re-resolves that itself from
+  // its own env, so it's never written here at all). Cleared the moment the
+  // job reaches a terminal state (done/failed/cancelled).
+  api_key_ciphertext String?
+
+  // Claim/lease bookkeeping for mutual exclusion across worker processes.
+  available_at     DateTime  @default(now())
+  locked_by        String?
+  locked_at        DateTime?
+  lease_expires_at DateTime?
+
+  last_error String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([status, available_at])
+}
