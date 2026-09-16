@@ -16,6 +16,8 @@ export interface UsageParams {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  latencyMs?: number;
+  retries?: number;
 }
 
 export async function recordUsage(params: UsageParams): Promise<void> {
@@ -31,6 +33,33 @@ export async function recordUsage(params: UsageParams): Promise<void> {
       input_tokens: params.inputTokens,
       output_tokens: params.outputTokens,
       estimated_cost_usd: cost,
+      latency_ms: params.latencyMs ?? 0,
+      retries: params.retries ?? 0,
+    },
+  });
+}
+
+export interface ProviderErrorParams {
+  runId: string;
+  userId: string;
+  organizationId: string;
+  provider: LLMProvider;
+  model: string;
+  error: string;
+}
+
+/** STEP 6: records a provider call that failed even after exhausting
+ * runProviderTurn's retries - backs the "provider errors" metric. */
+export async function recordProviderError(params: ProviderErrorParams): Promise<void> {
+  if (getStorageBackend() !== "postgres") return;
+  await prisma.providerErrorEvent.create({
+    data: {
+      run_id: params.runId,
+      user_id: params.userId,
+      organization_id: params.organizationId,
+      provider: params.provider,
+      model: params.model,
+      error: params.error,
     },
   });
 }

@@ -310,6 +310,72 @@ actually means here.
   compatible providers report it; a provider that omits `usage` in its
   response will show `null` token counts for that step.
 
+## Observability and operations
+
+- **Structured logging** (`lib/logger.ts`): one JSON line per event
+  (timestamp/level/message + arbitrary context) to stdout/stderr - pipe this
+  into whatever log aggregator the deployment already uses (CloudWatch,
+  Datadog, Loki, etc.), no app-side config needed.
+- **Correlation ids**: `middleware.ts` assigns an `X-Request-Id` to every
+  `/api/*` request (reusing an inbound one from a proxy/load balancer if
+  present) and echoes it on the response; a run's own id is its correlation
+  id across every log line the orchestrator/worker emit for it.
+- **Health endpoints**: `GET /api/health/live` (process is up, no dependency
+  checks) and `GET /api/health/ready` (PostgreSQL connectivity + at least one
+  live worker heartbeat - see `lib/health.ts`; always `ok: true` on the
+  filesystem backend, which has neither to check). Readiness returns 503
+  when not ready, so a load balancer stops routing to a degraded instance.
+- **Metrics**: `GET /api/metrics` (Prometheus text format, PostgreSQL-only -
+  `lib/metrics.ts`) - run counts by status, run/approval-wait duration
+  (sampled), job queue depth, stale-job count, provider call count/latency/
+  retries/errors (last 24h), and token usage/estimated cost (last 24h).
+  Computed live from persisted state on every scrape rather than kept as
+  in-process counters, since execution happens in a separate worker process
+  the web process's memory can't see.
+- **Error tracking hook** (`lib/errorTracking.ts`): every uncaught
+  orchestrator/worker error is logged structurally and, if `ERROR_WEBHOOK_URL`
+  is set, POSTed as JSON to it - point this at Sentry's inbound webhook, a
+  Slack/PagerDuty webhook, or a custom receiver.
+- **Alertable failure conditions** - what to page on, and which metric/
+  endpoint surfaces it:
+  - `GET /api/health/ready` returning 503 for more than a couple of minutes
+    (DB unreachable, or the entire worker fleet is down).
+  - `app_job_stale_count > 0` sustained - jobs with an expired lease that
+    haven't been reclaimed suggest either no worker is polling or claims are
+    failing.
+  - `app_job_queue_depth` growing without bound - workers aren't keeping up
+    with (or aren't running against) the queue.
+  - `app_provider_errors_24h` rising sharply - a provider outage or a bad
+    API key/model id affecting every run.
+  - Recurring `QuotaExceededError` (429s from `POST /api/runs`) for one
+    organization - either legitimate growth (raise their quota) or abuse.
+- **Backup and restore**: standard PostgreSQL dump/restore - the app has no
+  bespoke backup format, everything durable lives in the tables Prisma
+  manages.
+  ```bash
+  # Backup (run on a schedule, e.g. via cron/a managed DB's snapshot feature)
+  pg_dump --format=custom "$DATABASE_URL" > backup-$(date +%Y%m%d-%H%M%S).dump
+
+  # Restore into a fresh/empty database
+  pg_restore --clean --if-exists --no-owner -d "$DATABASE_URL" backup-XXXXXXXX.dump
+  # then bring the schema forward to the running code's expectations:
+  npm run db:migrate
+  ```
+  A managed Postgres (RDS, Cloud SQL, Neon, etc.) point-in-time-recovery
+  feature is the lower-effort default if available - prefer it over rolling
+  your own `pg_dump` cron job when it's an option.
+- **Data retention and deletion** (`lib/dataRetention.ts`): `DELETE
+  /api/runs/[id]` (OWNER/ADMIN only - see `lib/authz.ts`'s `canDeleteRun`)
+  permanently removes a run and everything derived from it (artifacts, its
+  job, usage/provider-error events, comments, reviews) in one transaction.
+  `deleteOrganizationRunData(organizationId)` (not yet wired to a route - a
+  full "delete my organization" flow would also need to remove Membership/
+  Organization rows, which is account lifecycle, not run data, and is out of
+  scope here) deletes every run belonging to an organization the same way.
+  There is no automatic time-based retention policy (e.g. "delete runs older
+  than N days") - add a scheduled job calling `deleteRunData` per matching
+  run id if the deployment needs one.
+
 ## Environment variables
 
 See `.env.local.example`. Notable ones:

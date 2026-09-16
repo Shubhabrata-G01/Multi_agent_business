@@ -79,16 +79,26 @@ export function resolveApiKey(
 
 const MAX_RETRIES = 3;
 
+// STEP 6 observability: how long the call took wall-clock and how many
+// retries it needed before succeeding - lib/orchestrator.ts's runTask
+// records both onto the UsageEvent it writes for this call.
+export interface RunProviderTurnResult extends ProviderCallResult {
+  latencyMs: number;
+  retries: number;
+}
+
 export async function runProviderTurn(
   provider: LLMProvider,
   params: ProviderCallParams,
-): Promise<ProviderCallResult> {
+): Promise<RunProviderTurnResult> {
   const runner = RUNNERS[provider];
   let lastError: unknown = null;
+  const startedAt = Date.now();
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await runner(params);
+      const result = await runner(params);
+      return { ...result, latencyMs: Date.now() - startedAt, retries: attempt };
     } catch (err) {
       lastError = err;
       const retryable = err instanceof ProviderCallError && err.retryable;

@@ -29,8 +29,9 @@ import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
 import { getStorageBackend } from "./storageBackend";
+import { captureException } from "./errorTracking";
 import { getQuotaConfig } from "./quotas";
-import { getRunCostUsd, recordUsage } from "./usage";
+import { getRunCostUsd, recordProviderError, recordUsage } from "./usage";
 import type {
   ApprovalRequest,
   ArtifactMeta,
@@ -800,6 +801,8 @@ async function runTask(
           model,
           inputTokens: result.inputTokens ?? 0,
           outputTokens: result.outputTokens ?? 0,
+          latencyMs: result.latencyMs,
+          retries: result.retries,
         });
       } catch (err) {
         console.error(`[usage] failed to record usage for run ${run.id}:`, err);
@@ -835,6 +838,22 @@ async function runTask(
     task.reason = err instanceof Error ? err.message : String(err);
     task.finished_at = new Date().toISOString();
     await saveRun(run);
+    // STEP 6 observability: a provider call that failed even after
+    // exhausting retries - best-effort, never blocks the run's own error path.
+    if (run.owner_id && run.organization_id) {
+      try {
+        await recordProviderError({
+          runId: run.id,
+          userId: run.owner_id,
+          organizationId: run.organization_id,
+          provider,
+          model,
+          error: task.reason,
+        });
+      } catch (recordErr) {
+        console.error(`[usage] failed to record provider error for run ${run.id}:`, recordErr);
+      }
+    }
     throw new Error(`${role} task (${agent.id}) failed: ${task.reason}`);
   }
 
@@ -1750,6 +1769,7 @@ export async function startRun(
  */
 export async function failRunOnUncaughtError(id: string, err: unknown): Promise<void> {
   const message = "Unexpected orchestrator error: " + (err instanceof Error ? err.message : String(err));
+  await captureException("run failed with an uncaught error", err, { runId: id });
   try {
     const run2 = await loadRun(id);
     if (run2 && run2.status === "running") {
@@ -1762,7 +1782,7 @@ export async function failRunOnUncaughtError(id: string, err: unknown): Promise<
     // Persisting the failure itself failed (e.g. the DB is unreachable) -
     // there is nowhere left to record this; surface it on the server log so
     // it isn't silently lost.
-    console.error(`[orchestrator] failed to record run ${id} failure (${message}):`, persistErr);
+    await captureException(`failed to record run ${id} failure`, persistErr, { runId: id });
   }
 }
 

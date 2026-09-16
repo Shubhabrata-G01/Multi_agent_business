@@ -58,3 +58,10 @@ export function canManageRun(role: OrgRole): boolean {
 export function canApproveGate(role: OrgRole): boolean {
   return role === "OWNER" || role === "ADMIN" || role === "REVIEWER";
 }
+
+// Permanent deletion (STEP 6 item 8) is irreversible, so it's held to a
+// higher bar than ordinary run management - only OWNER/ADMIN, never a plain
+// MEMBER or REVIEWER.
+export function canDeleteRun(role: OrgRole): boolean {
+  return role === "OWNER" || role === "ADMIN";
+}

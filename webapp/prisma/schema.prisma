@@ -178,9 +178,42 @@ model UsageEvent {
   input_tokens       Int
   output_tokens      Int
   estimated_cost_usd Float
+  // STEP 6 observability: wall-clock time of the provider call and how many
+  // retries index.ts's runProviderTurn needed before it succeeded.
+  latency_ms         Int      @default(0)
+  retries            Int      @default(0)
   created_at         DateTime @default(now())
 
   @@index([organization_id, created_at])
   @@index([user_id, created_at])
   @@index([run_id])
+}
+
+// STEP 6 observability: one row per provider call that failed even after
+// exhausting runProviderTurn's retries - backs the "provider errors" metric
+// and alertable-failure-condition docs (see README.md "Observability").
+model ProviderErrorEvent {
+  id              String   @id @default(cuid())
+  run_id          String
+  user_id         String
+  organization_id String
+  provider        String
+  model           String
+  error           String
+  created_at      DateTime @default(now())
+
+  @@index([organization_id, created_at])
+  @@index([created_at])
+}
+
+// STEP 6 observability: one row per live worker process, upserted on every
+// poll tick (lib/worker/run.ts) - lets the readiness health endpoint
+// (lib/health.ts) report whether ANY worker is actually alive, not just
+// whether the Job table exists.
+model WorkerHeartbeat {
+  worker_id   String   @id
+  concurrency Int
+  in_flight   Int
+  last_seen_at DateTime @updatedAt
+  created_at  DateTime @default(now())
 }
