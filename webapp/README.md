@@ -376,6 +376,82 @@ actually means here.
   than N days") - add a scheduled job calling `deleteRunData` per matching
   run id if the deployment needs one.
 
+## Deployment
+
+`Dockerfile` is a multi-stage build producing three targets from one image -
+`web` (`node server.js`, Next's standalone output), `worker` (this app's
+durable-job worker, `lib/worker/run.ts`, run via `tsx` since it isn't part of
+Next's own build), and `migrate` (`prisma migrate deploy`, run once before
+`web`/`worker` start). `docker-compose.yml` wires all four required pieces
+(STEP 7 item 8) together - PostgreSQL, the migration step, the web process,
+and the worker process:
+
+```bash
+cp .env.local.example .env.production   # fill in DATABASE_URL, AUTH_SECRET, POSTGRES_PASSWORD, provider keys
+docker compose --env-file .env.production up --build
+```
+
+Verified live: the full stack (migrate → web + worker) builds and starts
+cleanly, migrations apply against the containerized Postgres, `GET
+/api/health/ready` reports the containerized worker's heartbeat, and signup
+works end to end. Scale workers horizontally with `docker compose up --scale
+worker=3` - claiming is safe across replicas (`lib/jobs/jobRepository.ts`).
+Logs go to stdout/stderr as structured JSON (`lib/logger.ts`) - `docker logs`
+or any log driver picks them up without extra config; nothing is written to
+a file inside the container, so there's nothing to lose on a container
+restart (the durable state itself lives in PostgreSQL, not the filesystem -
+see "Storage backend").
+
+This compose file is a reference for how the pieces fit together, not a
+production Postgres - point `DATABASE_URL` at a managed instance (RDS, Cloud
+SQL, Neon, etc.) for anything real; drop the `postgres`/`migrate` services'
+Docker-local Postgres and just run `migrate`'s command once against that
+instance instead.
+
+### Production readiness checklist
+
+- [ ] `DATABASE_URL` points at a managed, backed-up PostgreSQL instance (not
+      the bundled `docker-compose.yml` Postgres).
+- [ ] `AUTH_SECRET` is a long random value, different per environment, never
+      committed (`openssl rand -base64 32`).
+- [ ] At least one server-side provider API key is configured, or BYOK-only
+      operation is an intentional product decision (instrumentation.ts warns
+      but doesn't block startup either way).
+- [ ] Migrations applied (`npm run db:migrate` / the `migrate` compose
+      service) before `web`/`worker` start.
+- [ ] At least one `worker` process is running - confirm via `GET
+      /api/health/ready`'s `worker.ok`, not just that the process started.
+- [ ] `npm test`, `npx tsc --noEmit`, `npm run build`, and `npm audit` all
+      pass (CI already enforces the first three - see `.github/workflows/ci.yml`).
+- [ ] Health checks wired into the platform's load balancer/orchestrator:
+      liveness → `/api/health/live`, readiness → `/api/health/ready`.
+- [ ] `/api/metrics` scraped by Prometheus (or compatible) and the
+      alertable conditions in "Observability and operations" above have
+      actual alert rules configured.
+- [ ] `ERROR_WEBHOOK_URL` points at a real receiver (Sentry/Slack/PagerDuty/
+      custom), or its absence is an accepted gap for this deployment.
+- [ ] A backup schedule exists for the database (managed snapshot/PITR, or
+      the `pg_dump` cron documented above) and has been test-restored at
+      least once.
+- [ ] Rate limits and quotas (`lib/rateLimit.ts`, `lib/quotas.ts`) reviewed
+      against expected real-world traffic/budget, not just the defaults.
+- [ ] Security headers/CSP (`next.config.mjs`) reviewed if the deployment
+      adds any third-party script/style/font - the current CSP has no
+      external origins allow-listed.
+
+### Dependency audit
+
+`npm audit` currently reports **0 vulnerabilities**. Next.js's bundled
+`postcss` and Prisma CLI's transitive `deepmerge-ts`/`effect` (used only by
+`@prisma/client`'s config-loading, a devDependency - never in the runtime
+bundle) had known advisories; `package.json`'s `overrides` field pins all
+three to patched versions without bumping Next or Prisma themselves (both
+verified compatible - full test suite, typecheck, build, and a live
+Docker deployment all still pass). Re-run `npm audit` after any dependency
+bump; if a future advisory can't be resolved via `overrides` and genuinely
+requires a breaking upgrade (e.g. Next 16), document the accepted risk and
+mitigation here rather than blindly running `npm audit fix --force`.
+
 ## Environment variables
 
 See `.env.local.example`. Notable ones:

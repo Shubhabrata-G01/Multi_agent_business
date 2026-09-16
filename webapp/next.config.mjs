@@ -5,6 +5,12 @@ const nextConfig = {
   // serverless function, so it is not bound by short serverless timeouts.
   reactStrictMode: true,
 
+  // Standalone output (STEP 7 item 7): bundles only the production
+  // dependencies actually reachable from the app into .next/standalone, so
+  // the Docker runtime image doesn't need a full `npm install` - see
+  // Dockerfile.
+  output: "standalone",
+
   // STEP 4 item 14: baseline security headers on every response.
   //
   // script-src allows 'unsafe-inline': Next's App Router streams RSC

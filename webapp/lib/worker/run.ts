@@ -8,10 +8,10 @@
 import { executeRun, failRunOnUncaughtError } from "../orchestrator";
 import { claimNextJob, completeJob, failJob, generateWorkerId, renewLease, type ClaimedJob } from "../jobs/jobRepository";
 import { resolveApiKey } from "../providers";
-import { getStorageBackend } from "../storageBackend";
 import { prisma } from "../prisma";
 import { logger } from "../logger";
 import { captureException } from "../errorTracking";
+import { validateWorkerProductionConfig } from "../productionConfig";
 import type { LLMProvider } from "../types";
 
 const WORKER_ID = generateWorkerId();
@@ -133,13 +133,12 @@ async function shutdown(signal: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const backend = getStorageBackend();
-  if (backend !== "postgres") {
-    throw new Error(
-      "The durable worker requires the PostgreSQL storage backend (DATABASE_URL). " +
-        "In filesystem mode (local development only), runs execute in-process instead - " +
-        "no separate worker is needed or usable. See README.md's \"Storage backend\" section.",
-    );
+  // Throws ProductionConfigError if the backend isn't PostgreSQL (the
+  // worker needs it in every environment, not just production) or if
+  // AUTH_SECRET is missing in production (STEP 7 items 5-6).
+  const { warnings } = validateWorkerProductionConfig();
+  for (const warning of warnings) {
+    logger.warn(warning, { workerId: WORKER_ID });
   }
 
   logger.info("worker starting", {
