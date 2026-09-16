@@ -287,6 +287,7 @@ export interface ApprovalRequest {
 
 export interface RunState {
   id: string;
+  owner_id?: string;
   idea: string;
   status: RunStatus;
   created_at: string;

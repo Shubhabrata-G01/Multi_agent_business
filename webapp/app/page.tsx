@@ -75,10 +75,16 @@ export default function HomePage() {
 
   useEffect(() => {
     fetch("/api/runs")
-      .then((r) => r.json())
-      .then((data) => setRuns(data.runs ?? []))
+      .then((r) => {
+        if (r.status === 401) {
+          router.push("/login");
+          return null;
+        }
+        return r.json();
+      })
+      .then((data) => setRuns(data?.runs ?? []))
       .catch(() => {});
-  }, []);
+  }, [router]);
 
   function handleProviderChange(next: LLMProvider) {
     setProvider(next);
@@ -102,6 +108,10 @@ export default function HomePage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 401) {
+          router.push("/login");
+          return;
+        }
         throw new Error(data.error || "Failed to classify idea");
       }
       setProfile(data.profile as BusinessProfile);
@@ -125,6 +135,10 @@ export default function HomePage() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 401) {
+          router.push("/login");
+          return;
+        }
         throw new Error(data.error || "Failed to start run");
       }
       router.push(`/runs/${data.id}`);

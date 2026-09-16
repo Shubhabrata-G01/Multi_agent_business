@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { classifyIdea } from "@/lib/classifier";
+import { requireUser } from "@/lib/apiAuth";
 import { isValidProvider, PROVIDER_DEFAULT_MODEL, PROVIDER_LABELS, resolveApiKey } from "@/lib/providers";
 
 /**
@@ -9,6 +10,8 @@ import { isValidProvider, PROVIDER_DEFAULT_MODEL, PROVIDER_LABELS, resolveApiKey
  * key returns 400 with "No API key supplied" for the UI to prompt on.
  */
 export async function POST(request: Request) {
+  const authResult = await requireUser();
+  if (authResult.response) return authResult.response;
   let body: unknown;
   try {
     body = await request.json();

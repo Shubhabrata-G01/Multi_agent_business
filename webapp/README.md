@@ -68,6 +68,11 @@ npm run dev
 
 Open http://localhost:3000.
 
+For the multi-user application, configure `DATABASE_URL` and `AUTH_SECRET`,
+run `npm run db:generate`, apply the checked-in Prisma migrations with
+`npm run db:migrate`, then create an account at `/signup`. Run and artifact
+endpoints require an authenticated user and only return that user's runs.
+
 ## How it works
 
 - `lib/businessFlow.ts` reads `../company/agents/registry.json` and

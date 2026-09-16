@@ -981,6 +981,7 @@ export function evaluateGate(
 
 function initRun(
   id: string,
+  ownerId: string,
   idea: string,
   provider: LLMProvider,
   model: string,
@@ -1037,6 +1038,7 @@ function initRun(
   const now = new Date().toISOString();
   return {
     id,
+    owner_id: ownerId,
     idea,
     status: "running",
     created_at: now,
@@ -1613,6 +1615,7 @@ export function startRun(
   suppliedApiKey: string | undefined,
   mode: ExecutionMode = "assisted",
   profile: BusinessProfile | undefined = undefined,
+  ownerId = "legacy-owner",
 ): string {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
@@ -1636,7 +1639,7 @@ export function startRun(
     );
   }
 
-  const run = initRun(id, idea, provider, model, source, mode, roadmap, profile);
+  const run = initRun(id, ownerId, idea, provider, model, source, mode, roadmap, profile);
   saveRun(run);
   if (source === "user_provided") {
     cacheApiKey(id, apiKey);

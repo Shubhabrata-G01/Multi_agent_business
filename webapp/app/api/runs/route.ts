@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/apiAuth";
 import { healIfStale, startRun } from "@/lib/orchestrator";
 import { listRuns } from "@/lib/runStore";
 import {
@@ -8,7 +9,10 @@ import {
 } from "@/lib/providers";
 
 export async function GET() {
+  const authResult = await requireUser();
+  if (authResult.response) return authResult.response;
   const runs = listRuns()
+    .filter((r) => r.owner_id === authResult.user?.id)
     .map((r) => healIfStale(r))
     .map((r) => ({
       id: r.id,
@@ -26,6 +30,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const authResult = await requireUser();
+  if (authResult.response || !authResult.user) return authResult.response;
   let body: unknown;
   try {
     body = await request.json();
@@ -79,7 +85,7 @@ export async function POST(request: Request) {
 
   let id: string;
   try {
-    id = startRun(idea, provider, model, apiKey, rawMode, profile);
+    id = startRun(idea, provider, model, apiKey, rawMode, profile, authResult.user.id);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing key on both the request and the server env is the caller's

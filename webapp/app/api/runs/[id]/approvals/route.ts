@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { decideApproval } from "@/lib/orchestrator";
+import { requireOwnedRun } from "@/lib/apiAuth";
 
 /**
  * Resolves a pending human-approval request on an assisted-mode run holding at a
@@ -13,6 +14,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const authResult = await requireOwnedRun(id);
+  if (authResult.response) return authResult.response;
 
   let body: unknown = {};
   try {

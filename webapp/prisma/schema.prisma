@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String?
+  email         String   @unique
+  password_hash String
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  memberships   Membership[]
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  created_at  DateTime     @default(now())
+  memberships Membership[]
+}
+
+model Membership {
+  user_id         String
+  organization_id String
+  role            OrganizationRole @default(MEMBER)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, organization_id])
+  @@index([organization_id])
+}
+
+model Run {
+  id         String   @id
+  owner_id   String
+  status     String
+  created_at DateTime
+  updated_at DateTime
+  data       Json
+  artifacts  ArtifactVersion[]
+
+  @@index([owner_id, created_at])
+}
+
+model ArtifactVersion {
+  id            String   @id @default(cuid())
+  run_id        String
+  flow_step     String
+  attempt       Int
+  created_at    DateTime
+  gate_decision String?
+  gate_reason   String?
+  data          Json
+  run           Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@unique([run_id, flow_step, attempt])
+  @@index([run_id, flow_step, attempt])
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  REVIEWER
+}

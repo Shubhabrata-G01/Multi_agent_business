@@ -185,6 +185,10 @@ export default function RunPage() {
           if (!cancelledRef.current) setNotFound(true);
           return;
         }
+        if (res.status === 401) {
+          window.location.href = "/login";
+          return;
+        }
         const data: RunState = await res.json();
         if (!cancelledRef.current) {
           setRun(data);

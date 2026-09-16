@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resumeRun } from "@/lib/orchestrator";
+import { requireOwnedRun } from "@/lib/apiAuth";
 
 /**
  * Resumes a "held" run (paused at a stage gate - see evaluateGate in
@@ -15,6 +16,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const authResult = await requireOwnedRun(id);
+  if (authResult.response) return authResult.response;
 
   let body: unknown = {};
   try {

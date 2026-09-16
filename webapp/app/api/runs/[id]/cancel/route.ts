@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { cancelRun } from "@/lib/orchestrator";
+import { requireOwnedRun } from "@/lib/apiAuth";
 
 /**
  * Cancels a running or held run. The orchestrator's loop checks run status
@@ -11,6 +12,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const authResult = await requireOwnedRun(id);
+  if (authResult.response) return authResult.response;
 
   try {
     cancelRun(id);
