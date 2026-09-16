@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { listArtifactVersions, queryArtifacts } from "@/lib/artifactStore";
 import type { ClaimType } from "@/lib/types";
+import { requireOrgRun } from "@/lib/apiAuth";
 
 const VALID_CLAIM_TYPES: ClaimType[] = [
   "fact",
@@ -22,6 +23,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const authResult = await requireOrgRun(id); // any org member may view
+  if (authResult.response) return authResult.response;
   const { searchParams } = new URL(request.url);
   const flowStep = searchParams.get("flow_step") ?? undefined;
   const agentId = searchParams.get("agent_id") ?? undefined;
@@ -32,10 +35,10 @@ export async function GET(
       : undefined;
 
   if (flowStep) {
-    return NextResponse.json({ versions: listArtifactVersions(id, flowStep) });
+    return NextResponse.json({ versions: await listArtifactVersions(id, flowStep) });
   }
 
   return NextResponse.json({
-    artifacts: queryArtifacts(id, { agent_id: agentId, claim_type: claimType }),
+    artifacts: await queryArtifacts(id, { agent_id: agentId, claim_type: claimType }),
   });
 }

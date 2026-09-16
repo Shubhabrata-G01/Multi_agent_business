@@ -1,0 +1,16 @@
+# Local-development-only PostgreSQL for this app. Not used in production -
+# see README.md "Storage backend" and the deployment docs (STEP 7).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: devuser
+      POSTGRES_PASSWORD: devpass
+      POSTGRES_DB: webapp_dev
+    ports:
+      - "55432:5432"
+    volumes:
+      - webapp-pg-dev:/var/lib/postgresql/data
+
+volumes:
+  webapp-pg-dev:

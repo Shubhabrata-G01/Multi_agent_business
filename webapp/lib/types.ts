@@ -41,6 +41,10 @@ export type TaskRole = "creator" | "critic" | "approver" | "executor" | "contrib
 export type TaskVerdict = "approved" | "changes_requested" | "rejected" | null;
 
 export interface StepTask {
+  // Stable identifier (STEP 5 item 2) - lets a task output be addressed
+  // independently (a comment target, an export row) rather than only by its
+  // position in steps[].tasks[].
+  id: string;
   role: TaskRole;
   agent_id: string;
   agent_name: string;
@@ -253,6 +257,16 @@ export interface RunConfig {
     max_usd?: number;
   };
   enabled_tool_scopes: string[]; // tool-registry ids this run may use; empty in simulation
+  // Phased execution (STEP 8 items 1/2/5) - see lib/phaseScopes.ts.
+  // phase_scope is informational (what the user picked, for display);
+  // stop_after_flow_step is the actual mechanism: executeRun holds the run
+  // once this flow_step completes with an "advance" decision, rather than
+  // continuing into the next phase automatically. Cleared (set to null) the
+  // moment that hold fires, so resuming continues to completion instead of
+  // re-pausing at the same boundary - a user who resumes has already made
+  // the deliberate choice to go further.
+  phase_scope?: string;
+  stop_after_flow_step?: string | null;
 }
 
 // One entry per gate evaluation - the run's actual execution path, since steps can
@@ -280,13 +294,25 @@ export interface ApprovalRequest {
   summary: string; // why approval is needed
   status: "pending" | "approved" | "rejected";
   created_at: string;
-  decided_by?: string; // "founder" (the human) or an authorized approver
+  // The authenticated approver's identity (STEP 4 item 4 - never a
+  // hardcoded placeholder like "founder"). decided_by is their email
+  // (human-readable, shown in the UI/audit trail); decided_by_user_id and
+  // decided_by_role are the underlying record.
+  decided_by?: string;
+  decided_by_user_id?: string;
+  decided_by_role?: string;
   decided_at?: string;
   reason?: string; // decision note (esp. on reject)
 }
 
 export interface RunState {
   id: string;
+  owner_id?: string;
+  // The organization (workspace) this run belongs to - access control scopes
+  // by this, not owner_id, so any member of the org can see/manage the run
+  // per their role (STEP 4 item 3). Optional only because a run created
+  // before this field existed has none on disk.
+  organization_id?: string;
   idea: string;
   status: RunStatus;
   created_at: string;

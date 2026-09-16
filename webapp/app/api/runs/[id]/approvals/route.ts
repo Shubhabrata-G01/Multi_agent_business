@@ -1,18 +1,32 @@
 import { NextResponse } from "next/server";
 import { decideApproval } from "@/lib/orchestrator";
+import { requireOrgRun } from "@/lib/apiAuth";
+import { canApproveGate } from "@/lib/authz";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { requireSameOrigin } from "@/lib/csrf";
 
 /**
  * Resolves a pending human-approval request on an assisted-mode run holding at a
  * Level-2+ gate (Phase 1c). Body: { approvalId, decision: "approve" | "reject",
  * reason?, apiKey? }. On success the run resumes (approve advances past the gate;
  * reject reworks it). A missing key surfaces "No API key supplied" (400) so the
- * UI can prompt, exactly like the resume route.
+ * UI can prompt, exactly like the resume route. Requires a role that can
+ * approve gates (OWNER/ADMIN/REVIEWER - see lib/authz.ts) - a plain MEMBER
+ * gets 403.
  */
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const originCheck = requireSameOrigin(request);
+  if (originCheck) return originCheck;
+
   const { id } = await params;
+  const authResult = await requireOrgRun(id, canApproveGate);
+  if (authResult.response || !authResult.user || !authResult.role) return authResult.response;
+
+  const rateLimited = checkRateLimit(`approvals:${authResult.user.id}`, "approval");
+  if (rateLimited) return rateLimited;
 
   let body: unknown = {};
   try {
@@ -39,7 +53,11 @@ export async function POST(
     typeof obj.apiKey === "string" && obj.apiKey.trim() ? obj.apiKey.trim() : undefined;
 
   try {
-    decideApproval(id, approvalId, decision, reason, apiKey);
+    await decideApproval(id, approvalId, decision, reason, apiKey, {
+      id: authResult.user.id,
+      email: authResult.user.email ?? authResult.user.id,
+      role: authResult.role,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const status = message.includes("not found")

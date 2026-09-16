@@ -1,0 +1,132 @@
+[
+  {
+    "flow_step": "01",
+    "attempt": 1,
+    "output_artifact": "Idea Brief",
+    "agent_id": "CEO-001",
+    "agent_name": "CEO",
+    "confidence": "medium",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {
+      "assumption": 5,
+      "estimate": 1,
+      "inference": 2,
+      "recommendation": 1
+    },
+    "created_at": "2026-09-08T17:43:03.152Z"
+  },
+  {
+    "flow_step": "02",
+    "attempt": 1,
+    "output_artifact": "Initial Opportunity Hypothesis",
+    "agent_id": "CEO-001",
+    "agent_name": "CEO",
+    "confidence": "medium",
+    "evidence_quality": "low",
+    "decision": "conditional",
+    "claim_counts": {
+      "decision": 1,
+      "inference": 2,
+      "estimate": 1,
+      "assumption": 3,
+      "recommendation": 3
+    },
+    "created_at": "2026-09-08T17:44:35.302Z"
+  },
+  {
+    "flow_step": "03",
+    "attempt": 1,
+    "output_artifact": "Problem Statement",
+    "agent_id": "PM-001",
+    "agent_name": "Product Manager",
+    "confidence": "medium",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {
+      "inference": 2,
+      "assumption": 2,
+      "estimate": 1,
+      "recommendation": 1,
+      "decision": 1
+    },
+    "created_at": "2026-09-08T17:46:06.040Z"
+  },
+  {
+    "flow_step": "04",
+    "attempt": 1,
+    "output_artifact": "ICP / Persona Draft",
+    "agent_id": "PM-001",
+    "agent_name": "Product Manager",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {},
+    "created_at": "2026-09-08T17:47:57.834Z"
+  },
+  {
+    "flow_step": "04",
+    "attempt": 2,
+    "output_artifact": "ICP / Persona Draft",
+    "agent_id": "PM-001",
+    "agent_name": "Product Manager",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {},
+    "created_at": "2026-09-08T17:50:01.648Z"
+  },
+  {
+    "flow_step": "04",
+    "attempt": 3,
+    "output_artifact": "ICP / Persona Draft",
+    "agent_id": "PM-001",
+    "agent_name": "Product Manager",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {},
+    "created_at": "2026-09-08T17:52:03.604Z"
+  },
+  {
+    "flow_step": "05",
+    "attempt": 1,
+    "output_artifact": "Research Findings; Journey Map",
+    "agent_id": "UXR-001",
+    "agent_name": "UX Researcher",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {},
+    "created_at": "2026-09-08T17:53:59.637Z"
+  },
+  {
+    "flow_step": "05",
+    "attempt": 2,
+    "output_artifact": "Research Findings; Journey Map",
+    "agent_id": "UXR-001",
+    "agent_name": "UX Researcher",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": null,
+    "claim_counts": {},
+    "created_at": "2026-09-08T17:57:18.398Z"
+  },
+  {
+    "flow_step": "05",
+    "attempt": 3,
+    "output_artifact": "Research Findings; Journey Map",
+    "agent_id": "UXR-001",
+    "agent_name": "UX Researcher",
+    "confidence": "low",
+    "evidence_quality": "low",
+    "decision": "conditional",
+    "claim_counts": {
+      "assumption": 3,
+      "inference": 2,
+      "recommendation": 1,
+      "decision": 1
+    },
+    "created_at": "2026-09-08T18:00:23.716Z"
+  }
+]

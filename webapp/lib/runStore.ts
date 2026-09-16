@@ -1,60 +1,42 @@
-import fs from "fs";
-import path from "path";
+// Dispatches to the PostgreSQL run repository (lib/db/runRepository.ts) or
+// the JSON-filesystem fallback (lib/fs/fsRunStore.ts) based on
+// lib/storageBackend.ts. Every operation is async and must be awaited by
+// callers - see STEP 2 of the remediation plan ("no fire-and-forget database
+// writes"). This module intentionally has no persistence logic of its own.
+import { getStorageBackend } from "./storageBackend";
+import * as fsStore from "./fs/fsRunStore";
+import * as pgStore from "./db/runRepository";
 import type { RunState } from "./types";
 
-const RUNS_DIR = path.join(process.cwd(), "runs");
+export { RunConflictError } from "./db/runRepository";
 
-function ensureDir() {
-  if (!fs.existsSync(RUNS_DIR)) {
-    fs.mkdirSync(RUNS_DIR, { recursive: true });
-  }
+function backend() {
+  return getStorageBackend() === "postgres" ? pgStore : fsStore;
 }
 
-function filePathFor(id: string): string {
-  // id comes only from crypto.randomUUID() in orchestrator.ts, never from
-  // user input, so no path-traversal sanitization is needed here.
-  return path.join(RUNS_DIR, `${id}.json`);
+export async function saveRun(run: RunState): Promise<void> {
+  return backend().saveRun(run);
 }
 
-// In-memory cache so status polling during an active run doesn't have to
-// hit disk on every request; still persisted to disk after every step so
-// progress survives a server restart. Entries expire after RUN_CACHE_TTL_MS
-// so a cache entry that's gone stale relative to disk (e.g. a dev-mode
-// module reload leaving a live request bound to an old module instance's
-// cache - this app has hit exactly that once) self-heals within a bounded
-// window instead of diverging from disk forever.
-const RUN_CACHE_TTL_MS = Number(process.env.RUN_CACHE_TTL_MS || 20 * 60 * 1000);
-const cache = new Map<string, { run: RunState; cachedAt: number }>();
-
-export function saveRun(run: RunState): void {
-  ensureDir();
-  cache.set(run.id, { run, cachedAt: Date.now() });
-  fs.writeFileSync(filePathFor(run.id), JSON.stringify(run, null, 2), "utf-8");
+export async function loadRun(id: string): Promise<RunState | null> {
+  return backend().loadRun(id);
 }
 
-export function loadRun(id: string): RunState | null {
-  const cached = cache.get(id);
-  if (cached) {
-    if (Date.now() - cached.cachedAt <= RUN_CACHE_TTL_MS) {
-      return cached.run;
-    }
-    cache.delete(id);
-  }
-  const file = filePathFor(id);
-  if (!fs.existsSync(file)) return null;
-  const run = JSON.parse(fs.readFileSync(file, "utf-8")) as RunState;
-  cache.set(id, { run, cachedAt: Date.now() });
-  return run;
+export async function listRuns(): Promise<RunState[]> {
+  return backend().listRuns();
 }
 
-export function listRuns(): RunState[] {
-  ensureDir();
-  const files = fs.readdirSync(RUNS_DIR).filter((f) => f.endsWith(".json"));
-  return files
-    .map((f) => {
-      const id = f.replace(/\.json$/, "");
-      return loadRun(id);
-    })
-    .filter((r): r is RunState => r !== null)
-    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+/** Owner-scoped run lookup (STEP 2 item 1) - lets the /api/runs list route
+ * push the ownership filter down to an indexed query on PostgreSQL instead
+ * of loading every run and filtering in JS. */
+export async function listRunsByOwner(ownerId: string): Promise<RunState[]> {
+  return backend().listRunsByOwner(ownerId);
+}
+
+/** Organization-scoped run lookup (STEP 4 item 3) - every member of an
+ * organization sees all of its runs, not just the ones they personally
+ * started; access control is by organization membership (see
+ * lib/authz.ts/lib/apiAuth.ts), not individual ownership. */
+export async function listRunsByOrganization(organizationId: string): Promise<RunState[]> {
+  return backend().listRunsByOrganization(organizationId);
 }

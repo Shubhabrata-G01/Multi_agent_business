@@ -1,0 +1,219 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String?
+  email         String   @unique
+  password_hash String
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  memberships   Membership[]
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  created_at  DateTime     @default(now())
+  memberships Membership[]
+}
+
+model Membership {
+  user_id         String
+  organization_id String
+  role            OrganizationRole @default(MEMBER)
+  user            User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  organization    Organization @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, organization_id])
+  @@index([organization_id])
+}
+
+model Run {
+  id     String @id
+  // The user who created the run (attribution/audit) - access control is by
+  // organization_id below, not owner_id, so any member of the run's
+  // organization can see/manage it per their role (STEP 4 item 3), not just
+  // whoever clicked "start".
+  owner_id        String
+  organization_id String
+  status          String
+  created_at      DateTime
+  updated_at      DateTime
+  data            Json
+  // Optimistic-concurrency token (see lib/db/runRepository.ts). Incremented on
+  // every successful update; a write whose expected version doesn't match the
+  // current row is rejected rather than silently overwriting a newer write.
+  version    Int      @default(1)
+  artifacts  ArtifactVersion[]
+
+  @@index([owner_id, created_at])
+  @@index([organization_id, created_at])
+  @@index([status])
+}
+
+model ArtifactVersion {
+  id               String   @id @default(cuid())
+  run_id           String
+  flow_step        String
+  attempt          Int
+  created_at       DateTime
+  gate_decision    String?
+  gate_reason      String?
+  // Normalized out of `data` for indexed lookups (lib/db/artifactRepository.ts's
+  // queryArtifacts) without needing a JSONB query for the common filters.
+  agent_id         String   @default("")
+  confidence       String?
+  evidence_quality String?
+  data             Json
+  run              Run      @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@unique([run_id, flow_step, attempt])
+  @@index([run_id, flow_step, attempt])
+  @@index([run_id, agent_id])
+  @@index([run_id, confidence])
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+  REVIEWER
+}
+
+// Durable execution queue (STEP 3) - lib/jobs/jobRepository.ts. One row per
+// run; startRun/resumeRun upsert it and the standalone worker process
+// (`npm run worker`, lib/worker/run.ts) claims/executes it. Replaces the
+// in-process fire-and-forget queue (lib/jobQueue.ts, still used only as the
+// local filesystem-mode dev fallback - see orchestrator.ts's
+// dispatchExecution) for the PostgreSQL backend.
+model Job {
+  id     String @id @default(cuid())
+  run_id String @unique
+
+  // "queued" | "running" | "done" | "failed" | "cancelled"
+  status String @default("queued")
+
+  attempts     Int @default(0)
+  max_attempts Int @default(5)
+
+  provider String
+  model    String
+  // AES-256-GCM ciphertext of a user-supplied (BYOK) key, keyed from
+  // AUTH_SECRET (see lib/jobs/providerKeyBox.ts) - null when the run uses a
+  // server-configured provider key (the worker re-resolves that itself from
+  // its own env, so it's never written here at all). Cleared the moment the
+  // job reaches a terminal state (done/failed/cancelled).
+  api_key_ciphertext String?
+
+  // Claim/lease bookkeeping for mutual exclusion across worker processes.
+  available_at     DateTime  @default(now())
+  locked_by        String?
+  locked_at        DateTime?
+  lease_expires_at DateTime?
+
+  last_error String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([status, available_at])
+}
+
+// Review workspace (STEP 5 items 7/9): a human comment on a step's artifact
+// or a specific task output within it - independent of the formal gate
+// approval flow (ApprovalRequest, embedded in Run.data), which only exists
+// for Level-2+ gate steps. A comment can be left on ANY step, gate or not.
+model Comment {
+  id            String   @id @default(cuid())
+  run_id        String
+  flow_step     String
+  attempt       Int
+  task_id       String? // null = comment on the step/artifact as a whole
+  author_id     String
+  author_email  String
+  body          String
+  created_at    DateTime @default(now())
+
+  @@index([run_id, flow_step, attempt])
+}
+
+// One row per (run, step, attempt) - assign-reviewer / mark-reviewed /
+// request-changes (STEP 5 item 7), independent of the formal gate approval
+// flow. "status" is "assigned" | "reviewed" | "changes_requested".
+model StepReview {
+  id              String   @id @default(cuid())
+  run_id          String
+  flow_step       String
+  attempt         Int
+  reviewer_id     String?
+  reviewer_email  String?
+  status          String
+  note            String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@unique([run_id, flow_step, attempt])
+  @@index([run_id])
+}
+
+// One row per provider call (STEP 4 item 8) - written by lib/usage.ts right
+// after each StepTask completes (orchestrator.ts's runTask). Backs quota
+// enforcement (concurrent/daily run counts come from Run; monthly token
+// budget and max-run-cost come from summing this table - see lib/quotas.ts)
+// and is the raw ledger an org/billing view would read from later.
+model UsageEvent {
+  id                 String   @id @default(cuid())
+  run_id             String
+  user_id            String
+  organization_id    String
+  provider           String
+  model              String
+  input_tokens       Int
+  output_tokens      Int
+  estimated_cost_usd Float
+  // STEP 6 observability: wall-clock time of the provider call and how many
+  // retries index.ts's runProviderTurn needed before it succeeded.
+  latency_ms         Int      @default(0)
+  retries            Int      @default(0)
+  created_at         DateTime @default(now())
+
+  @@index([organization_id, created_at])
+  @@index([user_id, created_at])
+  @@index([run_id])
+}
+
+// STEP 6 observability: one row per provider call that failed even after
+// exhausting runProviderTurn's retries - backs the "provider errors" metric
+// and alertable-failure-condition docs (see README.md "Observability").
+model ProviderErrorEvent {
+  id              String   @id @default(cuid())
+  run_id          String
+  user_id         String
+  organization_id String
+  provider        String
+  model           String
+  error           String
+  created_at      DateTime @default(now())
+
+  @@index([organization_id, created_at])
+  @@index([created_at])
+}
+
+// STEP 6 observability: one row per live worker process, upserted on every
+// poll tick (lib/worker/run.ts) - lets the readiness health endpoint
+// (lib/health.ts) report whether ANY worker is actually alive, not just
+// whether the Job table exists.
+model WorkerHeartbeat {
+  worker_id   String   @id
+  concurrency Int
+  in_flight   Int
+  last_seen_at DateTime @updatedAt
+  created_at  DateTime @default(now())
+}

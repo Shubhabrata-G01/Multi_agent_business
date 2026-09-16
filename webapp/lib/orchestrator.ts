@@ -9,8 +9,10 @@ import { recordGateDecision, saveArtifactVersion } from "./artifactStore";
 import { validateClaimSources } from "./claimSourceValidator";
 import { extractEvidence } from "./evidence";
 import { enqueueRun } from "./jobQueue";
+import { cancelJob, enqueueJob } from "./jobs/jobRepository";
 import { checkArtifactMedium } from "./mediumValidator";
 import { buildRoadmapForProfile } from "./roadmap";
+import { lastStepOfScope, type PhaseScope } from "./phaseScopes";
 import { roadmapIntegrityErrors } from "./roadmapIntegrity";
 import { reviewersForNode } from "./router";
 import {
@@ -27,6 +29,10 @@ import { renderIntegrationNotice } from "./integrations";
 import { cacheApiKey, getCachedApiKey } from "./keyCache";
 import { runProviderTurn, resolveApiKey, PROVIDER_LABELS } from "./providers";
 import { loadRun, saveRun } from "./runStore";
+import { getStorageBackend } from "./storageBackend";
+import { captureException } from "./errorTracking";
+import { getQuotaConfig } from "./quotas";
+import { getRunCostUsd, recordProviderError, recordUsage } from "./usage";
 import type {
   ApprovalRequest,
   ArtifactMeta,
@@ -187,7 +193,7 @@ function lastActivityAt(run: RunState): number {
  * back up from exactly the step it was frozen on, same as any other
  * error-status resume.
  */
-export function healIfStale(run: RunState): RunState {
+export async function healIfStale(run: RunState): Promise<RunState> {
   if (run.status !== "running") return run;
   const idleMs = Date.now() - lastActivityAt(run);
   if (idleMs < STALE_RUN_MS) return run;
@@ -210,7 +216,7 @@ export function healIfStale(run: RunState): RunState {
     ? `Step ${stuckStep.flow_step} (${stuckStep.activity}): ${reason}`
     : reason;
   run.updated_at = new Date().toISOString();
-  saveRun(run);
+  await saveRun(run);
   return run;
 }
 
@@ -718,6 +724,7 @@ function parseLabeledResponse(text: string, label: string, values: string[]): Pa
 
 function newTask(role: TaskRole, agent: RegistryAgent, model: string): StepTask {
   return {
+    id: crypto.randomUUID(),
     role,
     agent_id: agent.id,
     agent_name: agent.name,
@@ -765,7 +772,7 @@ async function runTask(
 ): Promise<StepTask> {
   const task = newTask(role, agent, model);
   run.steps[stepIndex].tasks.push(task);
-  saveRun(run);
+  await saveRun(run);
 
   try {
     const result = await runProviderTurn(provider, {
@@ -781,6 +788,27 @@ async function runTask(
     task.input_tokens = result.inputTokens;
     task.output_tokens = result.outputTokens;
     task.finished_at = new Date().toISOString();
+
+    // STEP 4 item 8: usage ledger. Awaited (no fire-and-forget writes - see
+    // STEP 2 item 5) but its own failure is logged, not propagated - a
+    // transient DB hiccup recording usage must never take down the run.
+    if (run.owner_id && run.organization_id) {
+      try {
+        await recordUsage({
+          runId: run.id,
+          userId: run.owner_id,
+          organizationId: run.organization_id,
+          provider,
+          model,
+          inputTokens: result.inputTokens ?? 0,
+          outputTokens: result.outputTokens ?? 0,
+          latencyMs: result.latencyMs,
+          retries: result.retries,
+        });
+      } catch (err) {
+        console.error(`[usage] failed to record usage for run ${run.id}:`, err);
+      }
+    }
 
     if (labelConfig.label === "ARTIFACT_META") {
       const { content, meta } = parseArtifactMeta(result.text);
@@ -810,11 +838,27 @@ async function runTask(
     task.status = "error";
     task.reason = err instanceof Error ? err.message : String(err);
     task.finished_at = new Date().toISOString();
-    saveRun(run);
+    await saveRun(run);
+    // STEP 6 observability: a provider call that failed even after
+    // exhausting retries - best-effort, never blocks the run's own error path.
+    if (run.owner_id && run.organization_id) {
+      try {
+        await recordProviderError({
+          runId: run.id,
+          userId: run.owner_id,
+          organizationId: run.organization_id,
+          provider,
+          model,
+          error: task.reason,
+        });
+      } catch (recordErr) {
+        console.error(`[usage] failed to record provider error for run ${run.id}:`, recordErr);
+      }
+    }
     throw new Error(`${role} task (${agent.id}) failed: ${task.reason}`);
   }
 
-  saveRun(run);
+  await saveRun(run);
   return task;
 }
 
@@ -981,6 +1025,8 @@ export function evaluateGate(
 
 function initRun(
   id: string,
+  ownerId: string,
+  organizationId: string,
   idea: string,
   provider: LLMProvider,
   model: string,
@@ -988,6 +1034,7 @@ function initRun(
   mode: ExecutionMode,
   roadmap: Roadmap,
   profile: BusinessProfile | undefined,
+  phaseScope: PhaseScope,
 ): RunState {
   // Steps are built from the run's own roadmap nodes, not the global flow -
   // this is the seam that makes the workflow a per-run input (Phase 0b). For
@@ -1032,11 +1079,15 @@ function initRun(
       max_total_executions: MAX_TOTAL_STEP_EXECUTIONS,
     },
     enabled_tool_scopes: [],
+    phase_scope: phaseScope,
+    stop_after_flow_step: lastStepOfScope(roadmap, phaseScope),
   };
 
   const now = new Date().toISOString();
   return {
     id,
+    owner_id: ownerId,
+    organization_id: organizationId,
     idea,
     status: "running",
     created_at: now,
@@ -1065,7 +1116,16 @@ function initRun(
  * reading/writing through the persisted RunState so a paused ("held") run
  * can be resumed later from exactly where it left off (see resumeRun).
  */
-async function executeRun(
+/**
+ * Runs the state machine loop for one run, from wherever its persisted
+ * current_step_index/status say it is, until it advances past the last step,
+ * holds, fails, or is cancelled. Always safe to (re-)invoke: it reloads the
+ * run fresh at the top of every iteration rather than carrying state across
+ * calls, which is exactly what makes it resumable after a crash - the
+ * durable worker (lib/worker/run.ts) calls this directly; there is no
+ * separate "resume from a checkpoint" code path to keep in sync.
+ */
+export async function executeRun(
   id: string,
   provider: LLMProvider,
   model: string,
@@ -1074,7 +1134,7 @@ async function executeRun(
   // The steps a run walks come from its own roadmap (Phase 0b). Legacy runs
   // created before the config field existed have no roadmap on disk, so they
   // fall back to the global 81-step flow - exactly their original behavior.
-  const initial = loadRun(id);
+  const initial = await loadRun(id);
   const roadmap = initial?.config?.roadmap;
   const flowSteps: FlowStepDef[] = roadmap
     ? roadmap.nodes.slice(0, MAX_RUN_STEPS)
@@ -1082,7 +1142,7 @@ async function executeRun(
   const flowIndexByStep = new Map(flowSteps.map((s, idx) => [s.flow_step, idx]));
 
   for (;;) {
-    const run = loadRun(id);
+    const run = await loadRun(id);
     if (!run) return; // deleted mid-run; nothing to do
     if (run.status !== "running") return;
     if (run.current_step_index >= flowSteps.length) break;
@@ -1096,7 +1156,7 @@ async function executeRun(
       run.status = "held";
       run.error = null;
       run.updated_at = new Date().toISOString();
-      saveRun(run);
+      await saveRun(run);
       return;
     }
 
@@ -1111,7 +1171,27 @@ async function executeRun(
         at: new Date().toISOString(),
       });
       run.updated_at = new Date().toISOString();
-      saveRun(run);
+      await saveRun(run);
+      return;
+    }
+
+    // STEP 4 item 7: hard budget check DURING execution (the request-time
+    // check is quotas.ts's assertCanStartRun, before the run even starts).
+    // A no-op on the filesystem backend (getRunCostUsd returns 0 there - no
+    // UsageEvent table to query - filesystem mode has no quota enforcement).
+    const maxRunCostUsd = getQuotaConfig().orgMaxRunCostUsd;
+    if ((await getRunCostUsd(id)) >= maxRunCostUsd) {
+      run.status = "held";
+      run.error = null;
+      run.path.push({
+        flow_step: run.steps[run.current_step_index]?.flow_step ?? "",
+        attempt: 0,
+        decision: "held",
+        reason: `Run cost ceiling reached ($${maxRunCostUsd.toLocaleString()}).`,
+        at: new Date().toISOString(),
+      });
+      run.updated_at = new Date().toISOString();
+      await saveRun(run);
       return;
     }
 
@@ -1130,7 +1210,7 @@ async function executeRun(
     stepResult.gate_reason = null;
     stepResult.started_at = new Date().toISOString();
     run.updated_at = stepResult.started_at;
-    saveRun(run);
+    await saveRun(run);
 
     try {
       const creatorAgent = getAgentById(stepResult.agent_id);
@@ -1152,7 +1232,7 @@ async function executeRun(
       if (mode === "assisted" && gate && pendingApprovalFor(run.approvals, stepDef.flow_step, attemptNumber)) {
         run.status = "held";
         run.updated_at = new Date().toISOString();
-        saveRun(run);
+        await saveRun(run);
         return;
       }
 
@@ -1203,7 +1283,7 @@ async function executeRun(
         run.status = "failed";
         run.error = `Blocked at step ${stepResult.flow_step} (${stepResult.activity}): ${stepResult.reason}`;
         run.updated_at = stepResult.finished_at;
-        saveRun(run);
+        await saveRun(run);
         return;
       }
 
@@ -1467,7 +1547,7 @@ async function executeRun(
       stepResult.status = "done";
       stepResult.finished_at = new Date().toISOString();
 
-      saveArtifactVersion({
+      await saveArtifactVersion({
         run_id: id,
         flow_step: stepDef.flow_step,
         output_artifact: stepDef.output_artifact,
@@ -1520,7 +1600,7 @@ async function executeRun(
         run.approvals = [...(run.approvals ?? []), approval];
         stepResult.gate_decision = "held";
         stepResult.gate_reason = "Awaiting human approval (assisted mode).";
-        recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
+        await recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
         run.path.push({
           flow_step: stepDef.flow_step,
           attempt: attemptNumber,
@@ -1530,13 +1610,42 @@ async function executeRun(
         });
         run.status = "held";
         run.updated_at = new Date().toISOString();
-        saveRun(run);
+        await saveRun(run);
+        return;
+      }
+
+      // STEP 8 items 1/2/5: phased execution. If this step is the last one
+      // in the user's selected scope and it would otherwise advance, hold
+      // here instead of continuing into the next phase automatically -
+      // stop_after_flow_step is cleared so a resume (a deliberate choice to
+      // go further) proceeds to completion rather than re-pausing at the
+      // same spot.
+      if (gateResult.action === "advance" && run.config?.stop_after_flow_step === stepDef.flow_step) {
+        run.config.stop_after_flow_step = null;
+        stepResult.gate_decision = "held";
+        stepResult.gate_reason = `Reached the end of the selected phase (${run.config.phase_scope ?? "scope"}).`;
+        await recordGateDecision(id, stepDef.flow_step, attemptNumber, "held", stepResult.gate_reason);
+        run.path.push({
+          flow_step: stepDef.flow_step,
+          attempt: attemptNumber,
+          decision: "held",
+          reason: `${stepResult.gate_reason} Resume to continue building.`,
+          at: stepResult.finished_at,
+        });
+        // This step itself is done (the gate said "advance") - only the
+        // NEXT step is what's being deferred, so move the program counter
+        // past it now. Otherwise a resume would re-run this already-
+        // completed step from scratch instead of continuing to the next one.
+        run.current_step_index = pc + 1;
+        run.status = "held";
+        run.updated_at = new Date().toISOString();
+        await saveRun(run);
         return;
       }
 
       stepResult.gate_decision = gateResult.action;
       stepResult.gate_reason = gateResult.reason;
-      recordGateDecision(id, stepDef.flow_step, attemptNumber, gateResult.action, gateResult.reason);
+      await recordGateDecision(id, stepDef.flow_step, attemptNumber, gateResult.action, gateResult.reason);
 
       run.path.push({
         flow_step: stepDef.flow_step,
@@ -1550,27 +1659,27 @@ async function executeRun(
       switch (gateResult.action) {
         case "no_go_exit":
           run.status = "stopped_no_go";
-          saveRun(run);
+          await saveRun(run);
           return;
         case "held":
           run.status = "held";
-          saveRun(run);
+          await saveRun(run);
           return;
         case "retry_step":
           run.step_attempts[stepDef.flow_step] = priorAttempts + 1;
-          saveRun(run);
+          await saveRun(run);
           continue;
         case "return_to_step": {
           const target = gateResult.target as string;
           run.jump_counts[target] = (run.jump_counts[target] ?? 0) + 1;
           run.current_step_index = flowIndexByStep.get(target) ?? pc;
-          saveRun(run);
+          await saveRun(run);
           continue;
         }
         case "advance":
         default:
           run.current_step_index = pc + 1;
-          saveRun(run);
+          await saveRun(run);
           continue;
       }
     } catch (err) {
@@ -1581,39 +1690,72 @@ async function executeRun(
       run.status = "failed";
       run.error = `Error at step ${stepResult.flow_step} (${stepResult.activity}): ${message}`;
       run.updated_at = stepResult.finished_at;
-      saveRun(run);
+      await saveRun(run);
       return;
     }
   }
 
-  const finalRun = loadRun(id);
+  const finalRun = await loadRun(id);
   if (finalRun && finalRun.status === "running") {
     finalRun.status = "completed";
     finalRun.updated_at = new Date().toISOString();
-    saveRun(finalRun);
+    await saveRun(finalRun);
   }
 }
 
 /**
- * Starts a new autonomous business-build run and returns its id
- * immediately. Execution continues in the background (fire-and-forget);
- * poll GET /api/runs/[id] for progress. Errors during execution are
- * captured onto the run record rather than thrown here, since the caller
- * has already returned by the time they can occur.
+ * STEP 3: hands a run's execution off to durable infrastructure rather than
+ * calling executeRun in-process. On the PostgreSQL backend this enqueues a
+ * Job row that the standalone `npm run worker` process (lib/worker/run.ts)
+ * claims and drives - a process restart (web OR worker) never loses the run,
+ * since the worker re-derives all progress from the persisted RunState, not
+ * from anything held in this process's memory. On the filesystem backend
+ * (local-dev-only, no durability guarantees anyway - see
+ * lib/storageBackend.ts) there is no Job table to enqueue into, so this
+ * falls back to the original in-process fire-and-forget loop via
+ * lib/jobQueue.ts, keeping zero-setup `npm run dev` working without Postgres.
  *
- * The resolved API key is held only in this function's closure and passed
- * directly into each provider call - it is never written into the RunState
- * that gets persisted to runs/<id>.json, so it never touches disk or the
- * GET /api/runs/[id] response.
+ * `apiKey` is only passed through for a user-supplied (BYOK) key - see
+ * lib/jobs/providerKeyBox.ts for why a server-configured key never needs to
+ * travel this way at all.
  */
-export function startRun(
+async function dispatchExecution(
+  id: string,
+  provider: LLMProvider,
+  model: string,
+  apiKey: string,
+  keySource: "user_provided" | "server_env",
+): Promise<void> {
+  if (getStorageBackend() === "postgres") {
+    await enqueueJob(id, provider, model, keySource === "user_provided" ? apiKey : undefined);
+    return;
+  }
+  enqueueRun(id, () => executeRun(id, provider, model, apiKey).catch((err) => failRunOnUncaughtError(id, err)));
+}
+
+/**
+ * Starts a new autonomous business-build run and returns its id
+ * immediately. Execution continues via dispatchExecution above; poll
+ * GET /api/runs/[id] for progress. Errors during execution are captured onto
+ * the run record rather than thrown here, since the caller has already
+ * returned by the time they can occur.
+ *
+ * The resolved API key is never written into the RunState that gets
+ * persisted (`data` column / `runs/<id>.json`), so it never touches the
+ * GET /api/runs/[id] response - see dispatchExecution/providerKeyBox.ts for
+ * how it reaches the process that actually makes the provider call.
+ */
+export async function startRun(
   idea: string,
   provider: LLMProvider,
   model: string,
   suppliedApiKey: string | undefined,
   mode: ExecutionMode = "assisted",
   profile: BusinessProfile | undefined = undefined,
-): string {
+  ownerId = "legacy-owner",
+  organizationId = "legacy-org",
+  phaseScope: PhaseScope = "full",
+): Promise<string> {
   const { apiKey, source } = resolveApiKey(provider, suppliedApiKey);
 
   const id = crypto.randomUUID();
@@ -1636,27 +1778,46 @@ export function startRun(
     );
   }
 
-  const run = initRun(id, idea, provider, model, source, mode, roadmap, profile);
-  saveRun(run);
+  const run = initRun(id, ownerId, organizationId, idea, provider, model, source, mode, roadmap, profile, phaseScope);
+  // Awaited: the caller (POST /api/runs) must not report a run as created
+  // until its initial state is actually durable.
+  await saveRun(run);
   if (source === "user_provided") {
     cacheApiKey(id, apiKey);
   }
 
-  enqueueRun(id, () =>
-    executeRun(id, provider, model, apiKey).catch((err) => {
-      const run2 = loadRun(id);
-      if (run2) {
-        run2.status = "failed";
-        run2.error =
-          "Unexpected orchestrator error: " +
-          (err instanceof Error ? err.message : String(err));
-        run2.updated_at = new Date().toISOString();
-        saveRun(run2);
-      }
-    }),
-  );
+  await dispatchExecution(id, provider, model, apiKey, source);
 
   return id;
+}
+
+/**
+ * Shared uncaught-error handler for the background executeRun loop (STEP 2
+ * item 5: every persistence operation is awaited, and an error must
+ * transition the run to a visible failed state - never swallowed). Only
+ * overwrites status when the run is still "running": if it's already
+ * "cancelled"/"held"/"stopped_no_go"/etc., a concurrent operation (cancelRun,
+ * decideApproval) already gave it a legitimate terminal/paused state and that
+ * must not be clobbered by an error that raced it (e.g. a save that lost an
+ * optimistic-concurrency conflict to that very operation).
+ */
+export async function failRunOnUncaughtError(id: string, err: unknown): Promise<void> {
+  const message = "Unexpected orchestrator error: " + (err instanceof Error ? err.message : String(err));
+  await captureException("run failed with an uncaught error", err, { runId: id });
+  try {
+    const run2 = await loadRun(id);
+    if (run2 && run2.status === "running") {
+      run2.status = "failed";
+      run2.error = message;
+      run2.updated_at = new Date().toISOString();
+      await saveRun(run2);
+    }
+  } catch (persistErr) {
+    // Persisting the failure itself failed (e.g. the DB is unreachable) -
+    // there is nowhere left to record this; surface it on the server log so
+    // it isn't silently lost.
+    await captureException(`failed to record run ${id} failure`, persistErr, { runId: id });
+  }
 }
 
 /**
@@ -1672,8 +1833,8 @@ export function startRun(
  * first, then falls back to the server env var, and only errors (prompting
  * the UI to ask for one) if neither is available.
  */
-export function resumeRun(id: string, suppliedApiKey: string | undefined): void {
-  let run = loadRun(id);
+export async function resumeRun(id: string, suppliedApiKey: string | undefined): Promise<void> {
+  let run = await loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
@@ -1681,7 +1842,7 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
   // /api/runs/[id] first (that route's own healIfStale call is what usually
   // catches this) - so check here too, otherwise a genuinely orphaned
   // "running" run would just throw "cannot be resumed" forever.
-  run = healIfStale(run);
+  run = await healIfStale(run);
   if (run.status !== "held" && run.status !== "failed") {
     throw new Error(`Run cannot be resumed (current status: ${run.status})`);
   }
@@ -1702,21 +1863,9 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
   run.key_source = source;
   run.error = null;
   run.updated_at = new Date().toISOString();
-  saveRun(run);
+  await saveRun(run);
 
-  enqueueRun(id, () =>
-    executeRun(id, run.provider, run.model, apiKey).catch((err) => {
-      const run2 = loadRun(id);
-      if (run2) {
-        run2.status = "failed";
-        run2.error =
-          "Unexpected orchestrator error: " +
-          (err instanceof Error ? err.message : String(err));
-        run2.updated_at = new Date().toISOString();
-        saveRun(run2);
-      }
-    }),
-  );
+  await dispatchExecution(id, run.provider, run.model, apiKey, source);
 }
 
 /**
@@ -1728,14 +1877,21 @@ export function resumeRun(id: string, suppliedApiKey: string | undefined): void 
  * cache -> env), and a missing key surfaces the same "No API key supplied"
  * error so the UI can prompt.
  */
-export function decideApproval(
+export interface Approver {
+  id: string;
+  email: string;
+  role: string;
+}
+
+export async function decideApproval(
   id: string,
   approvalId: string,
   decision: "approve" | "reject",
   reason: string | undefined,
   suppliedApiKey: string | undefined,
-): void {
-  const run = loadRun(id);
+  approver: Approver,
+): Promise<void> {
+  const run = await loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
@@ -1748,7 +1904,13 @@ export function decideApproval(
   }
 
   const now = new Date().toISOString();
-  approval.decided_by = "founder";
+  // STEP 4 item 4: the authenticated reviewer's real identity, never a
+  // hardcoded placeholder - decided_by is the human-readable audit trail
+  // value (shown in the UI), decided_by_user_id/decided_by_role the
+  // underlying record.
+  approval.decided_by = approver.email;
+  approval.decided_by_user_id = approver.id;
+  approval.decided_by_role = approver.role;
   approval.decided_at = now;
   approval.reason = reason;
 
@@ -1790,11 +1952,11 @@ export function decideApproval(
     if (stepIndex >= 0) run.current_step_index = stepIndex;
   }
   run.updated_at = now;
-  saveRun(run);
+  await saveRun(run);
 
   // No pending approval remains for this step now, so the generic resume path is
   // valid again and picks up from the (advanced or reset) program counter.
-  resumeRun(id, suppliedApiKey);
+  await resumeRun(id, suppliedApiKey);
 }
 
 /**
@@ -1804,8 +1966,8 @@ export function decideApproval(
  * the in-flight loop (if any) returns on its own within one iteration
  * boundary rather than being killed mid-call.
  */
-export function cancelRun(id: string): void {
-  const run = loadRun(id);
+export async function cancelRun(id: string): Promise<void> {
+  const run = await loadRun(id);
   if (!run) {
     throw new Error("Run not found");
   }
@@ -1814,5 +1976,15 @@ export function cancelRun(id: string): void {
   }
   run.status = "cancelled";
   run.updated_at = new Date().toISOString();
-  saveRun(run);
+  await saveRun(run);
+
+  // Best-effort: stops a queued-but-unclaimed durable job from ever starting.
+  // A job already claimed/running notices the status flip on its own next
+  // loop iteration (executeRun checks run.status at the top of every
+  // iteration) and exits normally within one iteration, same as before -
+  // this just makes that outcome visible on the Job row too. No-op on the
+  // filesystem backend (no Job table to update).
+  if (getStorageBackend() === "postgres") {
+    await cancelJob(id);
+  }
 }
