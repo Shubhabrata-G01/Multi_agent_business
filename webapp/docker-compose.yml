@@ -28,6 +28,7 @@ services:
     command: ["npx", "prisma", "migrate", "deploy"]
     environment:
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
