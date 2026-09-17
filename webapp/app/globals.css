@@ -31,6 +31,29 @@ main {
   padding: 40px 20px 80px;
 }
 
+.auth-bg {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background-image: linear-gradient(180deg, rgba(11, 13, 18, 0.6), rgba(11, 13, 18, 0.88)), url("/login-bg.jpg");
+  background-size: cover;
+  background-position: center;
+}
+
+.auth-card {
+  max-width: 440px;
+  width: 100%;
+  margin: 0;
+  padding: 36px 40px 44px;
+  background: rgba(18, 21, 28, 0.82);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
 h1 {
   font-size: 1.6rem;
   margin: 0 0 6px;
