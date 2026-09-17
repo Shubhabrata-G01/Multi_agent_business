@@ -39,6 +39,7 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
+      HOSTNAME: "0.0.0.0"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
