@@ -40,7 +40,7 @@ export default function SignupPage() {
       <form onSubmit={submit}>
         <div className="field">
           <label htmlFor="name">Name</label>
-          <input id="name" value={name} onChange={(e) => setName(e.target.value)} />
+          <input id="name" type="text" value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div className="field">
           <label htmlFor="email">Email</label>

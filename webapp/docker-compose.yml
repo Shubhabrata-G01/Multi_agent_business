@@ -42,6 +42,10 @@ services:
       HOSTNAME: "0.0.0.0"
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
       AUTH_SECRET: ${AUTH_SECRET:?set AUTH_SECRET}
+      # Only needed when this deployment is reachable directly over plain
+      # HTTP (no TLS-terminating proxy in front) - see auth.ts and
+      # .env.local.example. Leave unset/false once behind HTTPS.
+      AUTH_COOKIE_INSECURE: ${AUTH_COOKIE_INSECURE:-false}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
