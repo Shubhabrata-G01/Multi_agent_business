@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { isRateLimited } from "@/lib/rateLimit";
 
+const secureCookies = process.env.NODE_ENV === "production" && process.env.AUTH_COOKIE_INSECURE !== "true";
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
   session: { strategy: "jwt" },
@@ -11,16 +13,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   // on Auth.js's own HTTPS auto-detection - httpOnly (never readable from
   // client JS), sameSite=lax (sent on top-level navigation, not
   // cross-site POSTs - CSRF-hardening for the session cookie itself), and
-  // the `__Secure-` prefix + `secure: true` in production (browser refuses
-  // to ever send it over plain HTTP).
+  // the `__Secure-` prefix + `secure: true` whenever the app is actually
+  // served over HTTPS (browser refuses to ever send/store it over plain
+  // HTTP). NODE_ENV alone isn't a safe proxy for that: a production
+  // deployment reachable directly over HTTP (no TLS-terminating proxy in
+  // front yet, e.g. testing via a bare IP:port) would have every sign-in
+  // silently fail to persist a session, since the browser drops both the
+  // `secure` cookie and the `__Secure-` prefixed name outside HTTPS. Set
+  // AUTH_COOKIE_INSECURE=true to opt out for such a deployment.
   cookies: {
     sessionToken: {
-      name: process.env.NODE_ENV === "production" ? "__Secure-authjs.session-token" : "authjs.session-token",
+      name: secureCookies ? "__Secure-authjs.session-token" : "authjs.session-token",
       options: {
         httpOnly: true,
         sameSite: "lax",
         path: "/",
-        secure: process.env.NODE_ENV === "production",
+        secure: secureCookies,
       },
     },
   },
